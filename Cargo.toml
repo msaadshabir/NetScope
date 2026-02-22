@@ -1,0 +1,26 @@
+[package]
+name = "netscope"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance network packet capture and protocol analysis tool"
+
+[dependencies]
+# Packet capture
+pcap = "2"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Serialization (for future flow export)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Signal handling
+ctrlc = "3"
+
+# Formatting
+hex = "0.4"
