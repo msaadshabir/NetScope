@@ -227,7 +227,7 @@ mod tests {
         pkt[1] = 0x00; // src port = 49152
         pkt[2] = 0x00;
         pkt[3] = 0x50; // dst port = 80
-        // Sequence number = 1000
+                       // Sequence number = 1000
         pkt[4] = 0x00;
         pkt[5] = 0x00;
         pkt[6] = 0x03;

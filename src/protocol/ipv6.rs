@@ -64,9 +64,8 @@ impl<'a> Ipv6Header<'a> {
     /// Flow label (20 bits).
     #[inline]
     pub fn flow_label(&self) -> u32 {
-        let b = ((self.data[1] & 0x0F) as u32) << 16
-            | (self.data[2] as u32) << 8
-            | self.data[3] as u32;
+        let b =
+            ((self.data[1] & 0x0F) as u32) << 16 | (self.data[2] as u32) << 8 | self.data[3] as u32;
         b
     }
 

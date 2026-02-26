@@ -3,19 +3,14 @@
 //! Formats parsed packets into human-readable one-line summaries
 //! and optional detailed views with hex dumps.
 
-use crate::protocol::{
-    self, ethernet, ParsedPacket, NetworkHeader, TransportHeader,
-};
+use crate::protocol::{self, ethernet, NetworkHeader, ParsedPacket, TransportHeader};
 
 /// Print a one-line summary of a parsed packet.
 pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_>) {
     let ts = format_timestamp(timestamp);
 
     // Build the summary line
-    let mut summary = format!(
-        "#{:<6} {} Eth: {}",
-        index, ts, packet.ethernet
-    );
+    let mut summary = format!("#{:<6} {} Eth: {}", index, ts, packet.ethernet);
 
     // VLAN info
     if let Some(vlan) = &packet.vlan {
@@ -59,7 +54,7 @@ pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_
 
 /// Print a detailed view of a parsed packet, including hex dump.
 pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: &ParsedPacket<'_>) {
-    println!("{}",  "=".repeat(80));
+    println!("{}", "=".repeat(80));
     print_packet_summary(index, timestamp, packet);
     println!("{}", "-".repeat(80));
 
@@ -73,7 +68,11 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
         "    Destination: {}",
         ethernet::format_mac(packet.ethernet.dst_mac())
     );
-    println!("    EtherType:   {} (0x{:04x})", packet.ethernet.ether_type(), packet.ethernet.ether_type_raw());
+    println!(
+        "    EtherType:   {} (0x{:04x})",
+        packet.ethernet.ether_type(),
+        packet.ethernet.ether_type_raw()
+    );
 
     if let Some(vlan) = &packet.vlan {
         println!("  VLAN:");
@@ -89,7 +88,11 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("  IPv4:");
                 println!("    Source:       {}", hdr.src_addr());
                 println!("    Destination:  {}", hdr.dst_addr());
-                println!("    Protocol:     {} ({})", hdr.protocol(), hdr.protocol_raw());
+                println!(
+                    "    Protocol:     {} ({})",
+                    hdr.protocol(),
+                    hdr.protocol_raw()
+                );
                 println!("    TTL:          {}", hdr.ttl());
                 println!("    Total Length: {}", hdr.total_length());
                 println!("    ID:           0x{:04x}", hdr.identification());
@@ -101,13 +104,21 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("    Frag Offset:  {}", hdr.fragment_offset());
                 println!("    DSCP:         {}", hdr.dscp());
                 println!("    ECN:          {}", hdr.ecn());
-                println!("    Checksum:     0x{:04x} (valid: {})", hdr.checksum(), hdr.verify_checksum());
+                println!(
+                    "    Checksum:     0x{:04x} (valid: {})",
+                    hdr.checksum(),
+                    hdr.verify_checksum()
+                );
             }
             NetworkHeader::Ipv6(hdr) => {
                 println!("  IPv6:");
                 println!("    Source:       {}", hdr.src_addr());
                 println!("    Destination:  {}", hdr.dst_addr());
-                println!("    Next Header:  {} ({})", hdr.next_header(), hdr.next_header_raw());
+                println!(
+                    "    Next Header:  {} ({})",
+                    hdr.next_header(),
+                    hdr.next_header_raw()
+                );
                 println!("    Hop Limit:    {}", hdr.hop_limit());
                 println!("    Payload Len:  {}", hdr.payload_length());
                 println!("    Traffic Class:{}", hdr.traffic_class());
@@ -128,7 +139,11 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("    Flags:        {}", hdr.flags_string());
                 println!("    Window:       {}", hdr.window_size());
                 println!("    Checksum:     0x{:04x}", hdr.checksum());
-                println!("    Data Offset:  {} ({} bytes)", hdr.data_offset(), hdr.header_len());
+                println!(
+                    "    Data Offset:  {} ({} bytes)",
+                    hdr.data_offset(),
+                    hdr.header_len()
+                );
             }
             TransportHeader::Udp(hdr) => {
                 println!("  UDP:");
@@ -139,7 +154,11 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
             }
             TransportHeader::Icmp(hdr) => {
                 println!("  ICMP:");
-                println!("    Type:     {} ({})", hdr.icmp_type(), hdr.icmp_type_raw());
+                println!(
+                    "    Type:     {} ({})",
+                    hdr.icmp_type(),
+                    hdr.icmp_type_raw()
+                );
                 println!("    Code:     {}", hdr.code());
                 println!("    Checksum: 0x{:04x}", hdr.checksum());
             }
@@ -211,7 +230,12 @@ fn format_timestamp(ts: f64) -> String {
 }
 
 /// Print a compact one-line summary for a packet that failed to parse.
-pub fn print_parse_error(index: u64, timestamp: f64, data_len: usize, error: &protocol::ParseError) {
+pub fn print_parse_error(
+    index: u64,
+    timestamp: f64,
+    data_len: usize,
+    error: &protocol::ParseError,
+) {
     let ts = format_timestamp(timestamp);
     println!(
         "#{:<6} {} [PARSE ERROR] {} bytes: {}",

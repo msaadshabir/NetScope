@@ -66,9 +66,7 @@ pub fn open_capture(config: &CaptureConfig) -> Result<Capture<Active>, CaptureEr
             devices
                 .into_iter()
                 .find(|d| d.name == *name)
-                .ok_or_else(|| {
-                    CaptureError::NoDevice(format!("interface '{}' not found", name))
-                })?
+                .ok_or_else(|| CaptureError::NoDevice(format!("interface '{}' not found", name)))?
         }
         None => Device::lookup()
             .map_err(CaptureError::Pcap)?

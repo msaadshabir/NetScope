@@ -242,7 +242,7 @@ mod tests {
         pkt[9] = 6; // Protocol = TCP
         pkt[10] = 0x00;
         pkt[11] = 0x00; // Checksum (set to 0 for test)
-        // Source: 192.168.1.100
+                        // Source: 192.168.1.100
         pkt[12] = 192;
         pkt[13] = 168;
         pkt[14] = 1;

@@ -1,9 +1,9 @@
 pub mod ethernet;
+pub mod icmp;
 pub mod ipv4;
 pub mod ipv6;
 pub mod tcp;
 pub mod udp;
-pub mod icmp;
 
 use std::fmt;
 use std::net::IpAddr;
@@ -111,7 +111,11 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ParseError::TooShort { expected, actual } => {
-                write!(f, "packet too short: need {} bytes, got {}", expected, actual)
+                write!(
+                    f,
+                    "packet too short: need {} bytes, got {}",
+                    expected, actual
+                )
             }
             ParseError::InvalidHeader(msg) => write!(f, "invalid header: {}", msg),
         }
@@ -222,24 +226,20 @@ pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
 
     // Layer 4: Transport
     let (transport, payload) = match ip_proto {
-        Some(IpProtocol::Tcp) => {
-            match tcp::TcpHeader::parse(l4_data) {
-                Ok(hdr) => {
-                    let payload = hdr.payload();
-                    (Some(TransportHeader::Tcp(hdr)), payload)
-                }
-                Err(_) => (None, l4_data),
+        Some(IpProtocol::Tcp) => match tcp::TcpHeader::parse(l4_data) {
+            Ok(hdr) => {
+                let payload = hdr.payload();
+                (Some(TransportHeader::Tcp(hdr)), payload)
             }
-        }
-        Some(IpProtocol::Udp) => {
-            match udp::UdpHeader::parse(l4_data) {
-                Ok(hdr) => {
-                    let payload = hdr.payload();
-                    (Some(TransportHeader::Udp(hdr)), payload)
-                }
-                Err(_) => (None, l4_data),
+            Err(_) => (None, l4_data),
+        },
+        Some(IpProtocol::Udp) => match udp::UdpHeader::parse(l4_data) {
+            Ok(hdr) => {
+                let payload = hdr.payload();
+                (Some(TransportHeader::Udp(hdr)), payload)
             }
-        }
+            Err(_) => (None, l4_data),
+        },
         Some(IpProtocol::Icmp) | Some(IpProtocol::Icmpv6) => {
             match icmp::IcmpHeader::parse(l4_data) {
                 Ok(hdr) => {

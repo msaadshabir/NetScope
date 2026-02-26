@@ -1,0 +1,50 @@
+[capture]
+interface = "en0"
+promiscuous = true
+snaplen = 65535
+timeout_ms = 100
+filter = "tcp"
+
+[run]
+count = 0
+
+[output]
+# Omit keys or set to "" to disable file outputs
+write_pcap = ""
+export_json = ""
+export_csv = ""
+hex_dump = false
+quiet = false
+
+[flow]
+timeout_secs = 60.0
+max_flows = 100000
+
+[stats]
+enabled = false
+interval_ms = 1000
+top_flows = 0
+
+[analysis]
+rtt = true
+retrans = true
+out_of_order = true
+# Omit or set to "" to disable alert file
+alerts_jsonl = ""
+
+[analysis.anomalies]
+enabled = false
+
+[analysis.anomalies.syn_flood]
+enabled = true
+window_secs = 5.0
+syn_threshold = 200
+unique_src_threshold = 50
+cooldown_secs = 10.0
+
+[analysis.anomalies.port_scan]
+enabled = true
+window_secs = 10.0
+unique_ports_threshold = 25
+unique_hosts_threshold = 10
+cooldown_secs = 30.0
