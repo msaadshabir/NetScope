@@ -94,7 +94,9 @@ pub struct FlowEntry {
     pub rtt_ewma_ms: Option<f64>,
     pub rtt_samples: u64,
     #[serde(skip)]
-    last_report_bytes: u64,
+    last_report_bytes_stats: u64,
+    #[serde(skip)]
+    last_report_bytes_web: u64,
     #[serde(skip)]
     a_to_b_seq: TcpSeqTracker,
     #[serde(skip)]
@@ -121,7 +123,8 @@ impl FlowEntry {
             rtt_min_ms: None,
             rtt_ewma_ms: None,
             rtt_samples: 0,
-            last_report_bytes: 0,
+            last_report_bytes_stats: 0,
+            last_report_bytes_web: 0,
             a_to_b_seq: TcpSeqTracker::new(),
             b_to_a_seq: TcpSeqTracker::new(),
         }
@@ -455,7 +458,7 @@ impl FlowTracker {
             .iter()
             .filter_map(|(key, entry)| {
                 let total = entry.total_bytes();
-                let delta = total.saturating_sub(entry.last_report_bytes);
+                let delta = total.saturating_sub(entry.last_report_bytes_stats);
                 if delta > 0 {
                     Some(FlowDelta {
                         key: key.clone(),
@@ -471,10 +474,49 @@ impl FlowTracker {
         // Only reset counters for the flows we're reporting
         for d in &top {
             if let Some(entry) = self.flows.get_mut(&d.key) {
-                entry.last_report_bytes = entry.total_bytes();
+                entry.last_report_bytes_stats = entry.total_bytes();
             }
         }
         top
+    }
+
+    /// Return top-N flows by delta bytes, paired with their full snapshot.
+    ///
+    /// This resets the delta counters for the returned flows (same as
+    /// `top_flows_by_delta`) but also produces the `FlowSnapshot` the web
+    /// dashboard needs.
+    pub fn top_flows_with_snapshot(&mut self, n: usize) -> Vec<(FlowDelta, FlowSnapshot)> {
+        if n == 0 {
+            return Vec::new();
+        }
+        let mut deltas: Vec<FlowDelta> = self
+            .flows
+            .iter()
+            .filter_map(|(key, entry)| {
+                let total = entry.total_bytes();
+                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                if delta > 0 {
+                    Some(FlowDelta {
+                        key: key.clone(),
+                        delta_bytes: delta,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+        deltas.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+        let top: Vec<FlowDelta> = deltas.into_iter().take(n).collect();
+
+        let mut result = Vec::with_capacity(top.len());
+        for d in top {
+            if let Some(entry) = self.flows.get_mut(&d.key) {
+                entry.last_report_bytes_web = entry.total_bytes();
+                let snap = FlowSnapshot::from_entry(&d.key, entry);
+                result.push((d, snap));
+            }
+        }
+        result
     }
 
     pub fn snapshot(&self) -> Vec<FlowSnapshot> {

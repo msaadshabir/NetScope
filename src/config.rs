@@ -42,6 +42,7 @@ pub struct Config {
     pub flow: FlowConfig,
     pub stats: StatsConfig,
     pub analysis: AnalysisConfig,
+    pub web: WebConfig,
 }
 
 impl Default for Config {
@@ -53,6 +54,7 @@ impl Default for Config {
             flow: FlowConfig::default(),
             stats: StatsConfig::default(),
             analysis: AnalysisConfig::default(),
+            web: WebConfig::default(),
         }
     }
 }
@@ -238,6 +240,42 @@ impl Default for PortScanConfig {
             unique_ports_threshold: 25,
             unique_hosts_threshold: 10,
             cooldown_secs: 30.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Enable the web dashboard.
+    pub enabled: bool,
+    /// Address to bind the HTTP server to.
+    pub bind: String,
+    /// Port for the HTTP server.
+    pub port: u16,
+    /// How often (ms) to push stats ticks to connected clients.
+    pub tick_ms: u64,
+    /// Number of top flows to include in each tick.
+    pub top_n: usize,
+    /// Number of packets to keep in the detail ring buffer.
+    pub packet_buffer: usize,
+    /// Sample every Nth packet for the live packet feed (1 = every packet).
+    pub sample_rate: u64,
+    /// Max payload bytes to store per packet for hex dump display.
+    pub payload_bytes: usize,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        WebConfig {
+            enabled: false,
+            bind: "127.0.0.1".into(),
+            port: 8080,
+            tick_ms: 1000,
+            top_n: 10,
+            packet_buffer: 2000,
+            sample_rate: 1,
+            payload_bytes: 256,
         }
     }
 }

@@ -48,3 +48,13 @@ window_secs = 10.0
 unique_ports_threshold = 25
 unique_hosts_threshold = 10
 cooldown_secs = 30.0
+
+[web]
+enabled = false
+bind = "127.0.0.1"
+port = 8080
+tick_ms = 1000
+top_n = 10
+packet_buffer = 2000
+sample_rate = 1
+payload_bytes = 256

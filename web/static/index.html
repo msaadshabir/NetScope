@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetScope Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+/* ------------------------------------------------------------------ */
+/* Reset & base                                                       */
+/* ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f1117;
+  --surface:   #1a1d27;
+  --surface2:  #232733;
+  --border:    #2e3343;
+  --text:      #c9d1d9;
+  --text-dim:  #8b949e;
+  --accent:    #58a6ff;
+  --green:     #3fb950;
+  --red:       #f85149;
+  --yellow:    #d29922;
+  --orange:    #db6d28;
+  --mono:      'SF Mono', 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+  --sans:      -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+
+html { font-size: 14px; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ------------------------------------------------------------------ */
+/* Layout                                                             */
+/* ------------------------------------------------------------------ */
+header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+header h1 {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+header .status {
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.dot.connected    { background: var(--green); }
+.dot.disconnected { background: var(--red); }
+
+.main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto 1fr 1fr;
+  gap: 1px;
+  background: var(--border);
+  height: calc(100vh - 48px);
+}
+
+/* Cards row */
+.cards {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 1px;
+  background: var(--border);
+}
+.card {
+  flex: 1;
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+  text-align: center;
+}
+.card .label { font-size: 0.75rem; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.05em; }
+.card .value { font-size: 1.6rem; font-weight: 700; font-family: var(--mono); margin-top: 0.15rem; }
+.card .value.accent { color: var(--accent); }
+.card .value.green  { color: var(--green); }
+
+/* Panels */
+.panel {
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.panel-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.5rem;
+}
+
+/* Charts */
+.chart-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  padding: 0.5rem;
+}
+
+/* Tables */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  font-family: var(--mono);
+}
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface2);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody td {
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+tbody tr:hover { background: var(--surface2); }
+tbody tr.selected { background: #1f3a5f; }
+
+/* Packet detail */
+.detail-pane {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  padding: 0.75rem;
+}
+.detail-pane h3 {
+  color: var(--accent);
+  font-size: 0.85rem;
+  margin: 0.75rem 0 0.25rem;
+}
+.detail-pane h3:first-child { margin-top: 0; }
+.detail-pane .field { display: flex; gap: 0.5rem; padding: 0.1rem 0; }
+.detail-pane .field .fname { color: var(--text-dim); min-width: 140px; }
+.detail-pane .field .fval  { color: var(--text); }
+.hex-dump {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 0.5rem;
+  margin-top: 0.5rem;
+  overflow-x: auto;
+  white-space: pre;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+/* Tabs for bottom-right panel */
+.tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tab {
+  padding: 0.4rem 1rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--text-dim);
+  border-bottom: 2px solid transparent;
+  background: none;
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  font-family: var(--sans);
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Alert badge */
+.alert-row { color: var(--yellow); }
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--surface); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>NetScope</h1>
+  <div class="status">
+    <span class="dot disconnected" id="statusDot"></span>
+    <span id="statusText">Connecting...</span>
+  </div>
+</header>
+
+<div class="main">
+  <!-- Stats cards -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">Throughput</div>
+      <div class="value accent" id="cardMbps">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Packets/s</div>
+      <div class="value" id="cardPps">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Active Flows</div>
+      <div class="value green" id="cardFlows">--</div>
+    </div>
+    <div class="card">
+      <div class="label">Alerts</div>
+      <div class="value" id="cardAlerts" style="color:var(--yellow)">0</div>
+    </div>
+  </div>
+
+  <!-- Chart panel (top-left) -->
+  <div class="panel">
+    <div class="panel-header">Throughput &amp; Packet Rate</div>
+    <div class="panel-body" style="padding:0">
+      <div class="chart-container">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top flows (top-right) -->
+  <div class="panel">
+    <div class="panel-header">Top Flows</div>
+    <div class="panel-body" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Protocol</th>
+            <th>Source</th>
+            <th>Destination</th>
+            <th>Rate</th>
+            <th>Total</th>
+            <th>State</th>
+          </tr>
+        </thead>
+        <tbody id="flowsBody"></tbody>
+      </table>
+      <div class="empty-state" id="flowsEmpty">Waiting for data...</div>
+    </div>
+  </div>
+
+  <!-- Packet list (bottom-left) -->
+  <div class="panel">
+    <div class="panel-header">Packets</div>
+    <div class="panel-body" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Time</th>
+            <th>Protocol</th>
+            <th>Source</th>
+            <th>Destination</th>
+            <th>Len</th>
+            <th>Info</th>
+          </tr>
+        </thead>
+        <tbody id="packetsBody"></tbody>
+      </table>
+      <div class="empty-state" id="packetsEmpty">Waiting for packets...</div>
+    </div>
+  </div>
+
+  <!-- Packet detail / Alerts (bottom-right) -->
+  <div class="panel" style="display:flex;flex-direction:column">
+    <div class="tabs">
+      <button class="tab active" data-tab="detail" onclick="switchTab('detail',this)">Packet Detail</button>
+      <button class="tab" data-tab="alerts" onclick="switchTab('alerts',this)">Alerts</button>
+    </div>
+    <div class="panel-body" id="tabDetail">
+      <div class="empty-state" id="detailEmpty">Select a packet to inspect</div>
+      <div class="detail-pane" id="detailContent" style="display:none"></div>
+    </div>
+    <div class="panel-body" id="tabAlerts" style="display:none">
+      <table>
+        <thead><tr><th>Time</th><th>Kind</th><th>Description</th></tr></thead>
+        <tbody id="alertsBody"></tbody>
+      </table>
+      <div class="empty-state" id="alertsEmpty">No alerts</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ======================================================================
+// State
+// ======================================================================
+const MAX_CHART_POINTS = 120;
+const MAX_PACKETS = 500;
+const MAX_ALERTS  = 200;
+
+let ws = null;
+let selectedPacketId = null;
+let alertCount = 0;
+
+const chartData = { labels: [], mbps: [], pps: [] };
+let chart = null;
+
+// ======================================================================
+// WebSocket
+// ======================================================================
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/ws`);
+
+  ws.onopen = () => {
+    document.getElementById('statusDot').className = 'dot connected';
+    document.getElementById('statusText').textContent = 'Connected';
+  };
+
+  ws.onclose = () => {
+    document.getElementById('statusDot').className = 'dot disconnected';
+    document.getElementById('statusText').textContent = 'Disconnected';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (event) => {
+    const msg = JSON.parse(event.data);
+    switch (msg.type) {
+      case 'hello':
+        document.getElementById('statusText').textContent =
+          `Connected (v${msg.version})`;
+        break;
+      case 'stats_tick':
+        handleStatsTick(msg);
+        break;
+      case 'packet_sample':
+        handlePacketSample(msg);
+        break;
+      case 'packet_detail':
+        handlePacketDetail(msg);
+        break;
+      case 'alert':
+        handleAlert(msg);
+        break;
+    }
+  };
+}
+
+// ======================================================================
+// Stats tick
+// ======================================================================
+function handleStatsTick(msg) {
+  // Update cards
+  document.getElementById('cardMbps').textContent =
+    msg.mbps < 1 ? msg.mbps.toFixed(3) : msg.mbps.toFixed(2);
+  document.getElementById('cardPps').textContent =
+    msg.pps < 10 ? msg.pps.toFixed(1) : Math.round(msg.pps).toLocaleString();
+  document.getElementById('cardFlows').textContent =
+    msg.active_flows.toLocaleString();
+
+  // Update chart
+  const now = new Date();
+  const label = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  chartData.labels.push(label);
+  chartData.mbps.push(msg.mbps);
+  chartData.pps.push(msg.pps);
+  if (chartData.labels.length > MAX_CHART_POINTS) {
+    chartData.labels.shift();
+    chartData.mbps.shift();
+    chartData.pps.shift();
+  }
+  chart.update('none');
+
+  // Update flow table
+  updateFlowTable(msg.top_flows);
+}
+
+// ======================================================================
+// Flow table
+// ======================================================================
+function updateFlowTable(flows) {
+  const tbody = document.getElementById('flowsBody');
+  const empty = document.getElementById('flowsEmpty');
+
+  if (!flows || flows.length === 0) {
+    empty.style.display = '';
+    tbody.innerHTML = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  let html = '';
+  flows.forEach((f, i) => {
+    const rate = f.delta_mbps < 1
+      ? (f.delta_mbps * 1000).toFixed(0) + ' Kbps'
+      : f.delta_mbps.toFixed(2) + ' Mbps';
+    const total = formatBytes(f.bytes_total);
+    const state = f.tcp_state || '';
+    html += `<tr>
+      <td>${i + 1}</td>
+      <td>${f.protocol}</td>
+      <td>${f.src_ip}:${f.src_port}</td>
+      <td>${f.dst_ip}:${f.dst_port}</td>
+      <td>${rate}</td>
+      <td>${total}</td>
+      <td>${state}</td>
+    </tr>`;
+  });
+  tbody.innerHTML = html;
+}
+
+// ======================================================================
+// Packet list
+// ======================================================================
+function handlePacketSample(pkt) {
+  const tbody = document.getElementById('packetsBody');
+  const empty = document.getElementById('packetsEmpty');
+  empty.style.display = 'none';
+
+  const tr = document.createElement('tr');
+  tr.dataset.id = pkt.id;
+  tr.onclick = () => selectPacket(pkt.id, tr);
+
+  const time = formatTimestamp(pkt.ts);
+  tr.innerHTML = `
+    <td>${pkt.id}</td>
+    <td>${time}</td>
+    <td>${pkt.protocol}</td>
+    <td>${pkt.src}</td>
+    <td>${pkt.dst}</td>
+    <td>${pkt.len}</td>
+    <td>${escapeHtml(pkt.info)}</td>
+  `;
+
+  // Insert at top
+  if (tbody.firstChild) {
+    tbody.insertBefore(tr, tbody.firstChild);
+  } else {
+    tbody.appendChild(tr);
+  }
+
+  // Trim excess
+  while (tbody.children.length > MAX_PACKETS) {
+    tbody.removeChild(tbody.lastChild);
+  }
+}
+
+function selectPacket(id, tr) {
+  // Highlight
+  document.querySelectorAll('#packetsBody tr.selected').forEach(el => el.classList.remove('selected'));
+  tr.classList.add('selected');
+
+  selectedPacketId = id;
+
+  // Switch to detail tab
+  switchTab('detail', document.querySelector('[data-tab="detail"]'));
+
+  // Request detail from server
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_packet_detail', id: id }));
+  }
+
+  // Show loading state
+  document.getElementById('detailEmpty').textContent = 'Loading...';
+  document.getElementById('detailEmpty').style.display = '';
+  document.getElementById('detailContent').style.display = 'none';
+}
+
+// ======================================================================
+// Packet detail
+// ======================================================================
+function handlePacketDetail(detail) {
+  if (detail.id !== selectedPacketId) return;
+
+  document.getElementById('detailEmpty').style.display = 'none';
+  const content = document.getElementById('detailContent');
+  content.style.display = '';
+
+  let html = '';
+  detail.layers.forEach(layer => {
+    html += `<h3>${escapeHtml(layer.name)}</h3>`;
+    layer.fields.forEach(([name, value]) => {
+      html += `<div class="field"><span class="fname">${escapeHtml(name)}</span><span class="fval">${escapeHtml(value)}</span></div>`;
+    });
+  });
+
+  if (detail.hex_dump) {
+    html += `<h3>Hex Dump</h3><div class="hex-dump">${escapeHtml(detail.hex_dump)}</div>`;
+  }
+
+  content.innerHTML = html;
+}
+
+// ======================================================================
+// Alerts
+// ======================================================================
+function handleAlert(alert) {
+  alertCount++;
+  document.getElementById('cardAlerts').textContent = alertCount;
+
+  const tbody = document.getElementById('alertsBody');
+  document.getElementById('alertsEmpty').style.display = 'none';
+
+  const tr = document.createElement('tr');
+  tr.className = 'alert-row';
+  const time = formatTimestamp(alert.ts);
+  tr.innerHTML = `<td>${time}</td><td>${escapeHtml(alert.kind)}</td><td>${escapeHtml(alert.description)}</td>`;
+
+  if (tbody.firstChild) {
+    tbody.insertBefore(tr, tbody.firstChild);
+  } else {
+    tbody.appendChild(tr);
+  }
+
+  while (tbody.children.length > MAX_ALERTS) {
+    tbody.removeChild(tbody.lastChild);
+  }
+}
+
+// ======================================================================
+// Tabs
+// ======================================================================
+function switchTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tabDetail').style.display = name === 'detail' ? '' : 'none';
+  document.getElementById('tabAlerts').style.display = name === 'alerts' ? '' : 'none';
+}
+
+// ======================================================================
+// Helpers
+// ======================================================================
+function formatBytes(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+function formatTimestamp(ts) {
+  const secs = Math.floor(ts);
+  const micros = Math.round((ts - secs) * 1000000);
+  const d = new Date(secs * 1000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  const us = String(micros).padStart(6, '0');
+  return `${hh}:${mm}:${ss}.${us}`;
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ======================================================================
+// Chart setup
+// ======================================================================
+function initChart() {
+  const ctx = document.getElementById('chartCanvas').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: chartData.labels,
+      datasets: [
+        {
+          label: 'Mbps',
+          data: chartData.mbps,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2,
+          yAxisID: 'y',
+        },
+        {
+          label: 'pps',
+          data: chartData.pps,
+          borderColor: '#3fb950',
+          backgroundColor: 'rgba(63,185,80,0.05)',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2,
+          yAxisID: 'y1',
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          labels: { color: '#8b949e', font: { size: 11 } }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#8b949e', maxTicksLimit: 10, font: { size: 10 } },
+          grid: { color: '#2e3343' }
+        },
+        y: {
+          type: 'linear',
+          position: 'left',
+          title: { display: true, text: 'Mbps', color: '#58a6ff', font: { size: 11 } },
+          ticks: { color: '#58a6ff', font: { size: 10 } },
+          grid: { color: '#2e3343' },
+          beginAtZero: true,
+        },
+        y1: {
+          type: 'linear',
+          position: 'right',
+          title: { display: true, text: 'pps', color: '#3fb950', font: { size: 11 } },
+          ticks: { color: '#3fb950', font: { size: 10 } },
+          grid: { drawOnChartArea: false },
+          beginAtZero: true,
+        }
+      }
+    }
+  });
+}
+
+// ======================================================================
+// Init
+// ======================================================================
+document.addEventListener('DOMContentLoaded', () => {
+  initChart();
+  connect();
+});
+</script>
+</body>
+</html>

@@ -108,4 +108,20 @@ pub struct Cli {
     /// Write anomaly alerts as JSON lines
     #[arg(long)]
     pub alerts_jsonl: Option<std::path::PathBuf>,
+
+    /// Enable the web dashboard
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_web")]
+    pub web: bool,
+
+    /// Disable the web dashboard
+    #[arg(long = "no-web", action = clap::ArgAction::SetTrue, conflicts_with = "web")]
+    pub no_web: bool,
+
+    /// Web dashboard bind address
+    #[arg(long)]
+    pub web_bind: Option<String>,
+
+    /// Web dashboard port
+    #[arg(long)]
+    pub web_port: Option<u16>,
 }
