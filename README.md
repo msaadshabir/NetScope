@@ -9,6 +9,7 @@ High-performance packet capture and protocol analysis tool built in Rust.
 - **Flow tracking** with bidirectional byte/packet counters, TCP state machine, and automatic expiration
 - **TCP analysis** -- RTT estimation (EWMA), retransmission detection, out-of-order segment detection
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds and cooldowns
+- **Web dashboard** -- real-time browser UI with throughput charts, top flows table, packet inspector, and alerts via WebSocket
 - **Export** -- flow table to JSON or CSV, alerts to JSON lines, raw packets to pcap
 - **TOML configuration** with full CLI override support (including `--no-*` flags for booleans)
 - **Periodic throughput stats** with top-N flows by bandwidth delta
@@ -76,6 +77,20 @@ Enable anomaly detection and write alerts to a file:
 sudo cargo run -- --anomalies --alerts-jsonl alerts.jsonl
 ```
 
+Start the web dashboard:
+
+```bash
+sudo cargo run -- --web
+```
+
+Then open http://127.0.0.1:8080 in a browser. Use `--web-port` to change the port or `--web-bind` to change the bind address.
+
+Combine with other options:
+
+```bash
+sudo cargo run -- --web --web-port 9090 --quiet --anomalies
+```
+
 Use a configuration file with CLI overrides:
 
 ```bash
@@ -120,6 +135,10 @@ Options:
       --anomalies                    Enable anomaly detection alerts
       --no-anomalies                 Disable anomaly detection alerts
       --alerts-jsonl <PATH>          Write anomaly alerts as JSON lines
+      --web                          Enable the web dashboard
+      --no-web                       Disable the web dashboard
+      --web-bind <ADDR>              Web dashboard bind address (default: 127.0.0.1)
+      --web-port <PORT>              Web dashboard port (default: 8080)
   -h, --help                         Print help
   -V, --version                      Print version
 ```
@@ -165,8 +184,60 @@ See `netscope.example.toml` for a complete example.
 | | `unique_ports_threshold` | int | `25` | Unique ports threshold |
 | | `unique_hosts_threshold` | int | `10` | Unique hosts threshold |
 | | `cooldown_secs` | float | `30.0` | Alert cooldown period |
+| `[web]` | `enabled` | bool | `false` | Enable web dashboard |
+| | `bind` | string | `"127.0.0.1"` | HTTP server bind address |
+| | `port` | int | `8080` | HTTP server port |
+| | `tick_ms` | int | `1000` | Stats push interval (ms) |
+| | `top_n` | int | `10` | Top-N flows per tick |
+| | `packet_buffer` | int | `2000` | Packets kept for detail inspection |
+| | `sample_rate` | int | `1` | Sample every Nth packet (0 = disable feed) |
+| | `payload_bytes` | int | `256` | Max payload bytes stored per packet |
 
 Empty strings in path fields (e.g., `write_pcap = ""`) are treated as disabled.
+
+## Web Dashboard
+
+The web dashboard provides a real-time browser interface for monitoring captured traffic. Enable it with `--web` or `[web] enabled = true` in the config file.
+
+### Features
+
+- **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, and alert count
+- **Time-series chart** -- dual-axis throughput and packet rate history (Chart.js, last 120 ticks)
+- **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state
+- **Packet list** -- sampled packets with click-to-inspect
+- **Packet inspector** -- full protocol tree (Ethernet, IP, TCP/UDP/ICMP fields) and hex dump, fetched on demand
+- **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan)
+- **Auto-reconnect** -- WebSocket reconnects automatically after disconnection
+
+### Architecture
+
+The web server runs in a dedicated thread with its own tokio runtime. The capture loop on the main thread pushes events through an `mpsc` channel. The server broadcasts to all connected WebSocket clients. This design keeps the capture path lock-free and unaffected by dashboard load.
+
+```
+Capture thread (main)              Web server thread (tokio)
+  |                                  |
+  |-- mpsc channel ----------------> ingest task
+  |   (StatsTick, PacketSample,        |
+  |    PacketStored, Alert)          broadcast channel
+  |                                    |
+  |                                  WS client 1
+  |                                  WS client 2
+  |                                  ...
+```
+
+The frontend is embedded into the binary via `rust-embed`, so `--web` works with no external files or build steps.
+
+### Configuration
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `tick_ms` | `1000` | How often stats are pushed to clients |
+| `top_n` | `10` | Number of top flows included per tick |
+| `packet_buffer` | `2000` | Ring buffer size for packet detail lookups |
+| `sample_rate` | `1` | Send every Nth packet to the UI (0 = disable packet feed) |
+| `payload_bytes` | `256` | Max raw bytes stored per packet for hex dump |
+
+At high capture rates, the event channel (capacity 4096) applies backpressure -- dropped events are logged at TRACE level. Increase `sample_rate` to reduce load.
 
 ## Supported Protocols
 
@@ -219,6 +290,7 @@ Alerts are printed to stdout and optionally written as JSON lines to a file (`--
 - VLAN tags (802.1Q) are decoded and surfaced in packet output.
 - Hex dumps are limited to the first 256 bytes of each packet.
 - Timestamps are formatted as `HH:MM:SS.microseconds` (UTC).
+- The web dashboard binds to `127.0.0.1` by default for security (capture typically runs as root).
 
 ## License
 
