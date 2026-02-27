@@ -58,3 +58,8 @@ top_n = 10
 packet_buffer = 2000
 sample_rate = 1
 payload_bytes = 256
+
+[pipeline]
+enabled = false
+workers = 0          # 0 = auto-detect (half of CPU count, clamped 1..8)
+channel_capacity = 4096

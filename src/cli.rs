@@ -124,4 +124,12 @@ pub struct Cli {
     /// Web dashboard port
     #[arg(long)]
     pub web_port: Option<u16>,
+
+    /// Enable the sharded pipeline for multi-core packet processing
+    #[arg(long)]
+    pub pipeline: bool,
+
+    /// Number of worker threads for the pipeline (0 = auto, default: 0)
+    #[arg(long, default_value_t = 0)]
+    pub workers: usize,
 }

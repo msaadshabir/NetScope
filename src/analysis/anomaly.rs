@@ -1,6 +1,7 @@
 use crate::config::{AnomalyConfig, PortScanConfig, SynFloodConfig};
 use crate::flow::{Endpoint, FlowProtocol};
-use std::collections::{HashMap, HashSet, VecDeque};
+use ahash::{AHashMap, AHashSet};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::net::IpAddr;
@@ -140,8 +141,8 @@ impl AlertKind {
 #[derive(Debug, Clone)]
 struct SynFloodState {
     config: SynFloodConfig,
-    events: HashMap<SynFloodKey, VecDeque<(f64, IpAddr)>>,
-    cooldowns: HashMap<SynFloodKey, f64>,
+    events: AHashMap<SynFloodKey, VecDeque<(f64, IpAddr)>>,
+    cooldowns: AHashMap<SynFloodKey, f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -154,8 +155,8 @@ impl SynFloodState {
     fn new(config: SynFloodConfig) -> Self {
         SynFloodState {
             config,
-            events: HashMap::new(),
-            cooldowns: HashMap::new(),
+            events: AHashMap::new(),
+            cooldowns: AHashMap::new(),
         }
     }
 
@@ -178,7 +179,7 @@ impl SynFloodState {
             }
         }
 
-        let mut unique = HashSet::new();
+        let mut unique = AHashSet::new();
         for (_, ip) in events.iter() {
             unique.insert(*ip);
         }
@@ -215,8 +216,8 @@ impl SynFloodState {
 #[derive(Debug, Clone)]
 struct PortScanState {
     config: PortScanConfig,
-    events: HashMap<IpAddr, VecDeque<PortScanEvent>>,
-    cooldowns: HashMap<IpAddr, f64>,
+    events: AHashMap<IpAddr, VecDeque<PortScanEvent>>,
+    cooldowns: AHashMap<IpAddr, f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -232,8 +233,8 @@ impl PortScanState {
     fn new(config: PortScanConfig) -> Self {
         PortScanState {
             config,
-            events: HashMap::new(),
-            cooldowns: HashMap::new(),
+            events: AHashMap::new(),
+            cooldowns: AHashMap::new(),
         }
     }
 
@@ -274,8 +275,8 @@ impl PortScanState {
             }
         }
 
-        let mut unique_ports = HashSet::new();
-        let mut unique_hosts = HashSet::new();
+        let mut unique_ports = AHashSet::new();
+        let mut unique_hosts = AHashSet::new();
         for evt in events.iter() {
             unique_ports.insert(evt.dst_port);
             unique_hosts.insert(evt.dst_ip);

@@ -43,6 +43,7 @@ pub struct Config {
     pub stats: StatsConfig,
     pub analysis: AnalysisConfig,
     pub web: WebConfig,
+    pub pipeline: PipelineConfig,
 }
 
 impl Default for Config {
@@ -55,6 +56,7 @@ impl Default for Config {
             stats: StatsConfig::default(),
             analysis: AnalysisConfig::default(),
             web: WebConfig::default(),
+            pipeline: PipelineConfig::default(),
         }
     }
 }
@@ -276,6 +278,27 @@ impl Default for WebConfig {
             packet_buffer: 2000,
             sample_rate: 1,
             payload_bytes: 256,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PipelineConfig {
+    /// Enable the sharded pipeline.
+    pub enabled: bool,
+    /// Number of worker threads (0 = auto-detect).
+    pub workers: usize,
+    /// Capacity of each capture → worker channel.
+    pub channel_capacity: usize,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        PipelineConfig {
+            enabled: false,
+            workers: 0,
+            channel_capacity: 4096,
         }
     }
 }

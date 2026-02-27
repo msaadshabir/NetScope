@@ -1,11 +1,7 @@
-mod analysis;
-mod capture;
 mod cli;
-mod config;
-mod display;
-mod flow;
-mod protocol;
-mod web;
+
+use netscope::{analysis, capture, config, display, flow, pipeline, protocol, web};
+use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -141,6 +137,54 @@ fn run_capture(
     } else {
         println!("Capturing packets (Ctrl-C to stop)...");
     }
+
+    if config.pipeline.enabled {
+        run_capture_pipeline(
+            config,
+            running,
+            &mut cap,
+            savefile.as_mut(),
+            web_handle.as_ref(),
+        )?;
+    } else {
+        run_capture_inline(
+            config,
+            running,
+            &mut cap,
+            savefile.as_mut(),
+            web_handle.as_ref(),
+        )?;
+    }
+
+    // Print kernel-level pcap statistics (recv/drop/ifdrop)
+    match cap.stats() {
+        Ok(stats) => {
+            println!("  Kernel received:   {}", stats.received);
+            println!("  Kernel dropped:    {}", stats.dropped);
+            println!("  Interface dropped: {}", stats.if_dropped);
+            if stats.received > 0 {
+                let drop_pct = (stats.dropped as f64 / stats.received as f64) * 100.0;
+                println!("  Drop rate:         {:.2}%", drop_pct);
+            }
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to read pcap stats");
+        }
+    }
+
+    println!("{}", "=".repeat(50));
+
+    Ok(())
+}
+
+/// Original single-threaded capture loop (no pipeline).
+fn run_capture_inline(
+    config: &RuntimeConfig,
+    running: &Arc<AtomicBool>,
+    cap: &mut pcap::Capture<pcap::Active>,
+    mut savefile: Option<&mut pcap::Savefile>,
+    web_handle: Option<&web::server::WebHandle>,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     let mut packet_count: u64 = 0;
@@ -203,16 +247,18 @@ fn run_capture(
                         for alert in &alerts {
                             println!("[alert] {}", alert.description);
                             // Forward alerts to web dashboard
-                            if let Some(handle) = &web_handle {
-                                if handle.event_tx.try_send(
-                                    web::messages::CaptureEvent::Alert(
+                            if let Some(handle) = web_handle {
+                                if handle
+                                    .event_tx
+                                    .try_send(web::messages::CaptureEvent::Alert(
                                         web::messages::AlertMsg {
                                             ts: alert.ts,
                                             kind: format!("{:?}", alert.kind),
                                             description: alert.description.clone(),
                                         },
-                                    ),
-                                ).is_err() {
+                                    ))
+                                    .is_err()
+                                {
                                     tracing::trace!("web event channel full, dropping alert");
                                 }
                             }
@@ -221,11 +267,8 @@ fn run_capture(
                     flow_tracker.observe(timestamp, wire_len, &parsed);
 
                     // Send packet samples to web dashboard.
-                    // sample_rate=0 disables the live packet feed entirely;
-                    // sample_rate=1 sends every packet; N sends every Nth packet.
-                    if let Some(handle) = &web_handle {
-                        if config.web.sample_rate > 0
-                            && packet_count % config.web.sample_rate == 0
+                    if let Some(handle) = web_handle {
+                        if config.web.sample_rate > 0 && packet_count % config.web.sample_rate == 0
                         {
                             let (sample, stored) = build_packet_data(
                                 packet_count,
@@ -264,8 +307,6 @@ fn run_capture(
                 }
             }
 
-            // Wire-level counters — intentionally include parse-failed packets so
-            // that throughput matches what the NIC actually saw (same as CLI stats).
             stats_bytes += wire_len;
             stats_packets += 1;
             web_tick_bytes += wire_len;
@@ -274,8 +315,7 @@ fn run_capture(
             flow_tracker.maybe_expire(timestamp);
         }
 
-        // Stats printing runs on every loop iteration (including timeouts)
-        // so stats are reported even during traffic lulls
+        // Stats printing
         let now = Instant::now();
         if config.stats.enabled
             && now.duration_since(stats_last).as_millis() as u64 >= config.stats.interval_ms
@@ -303,7 +343,7 @@ fn run_capture(
         }
 
         // Web dashboard tick
-        if let Some(handle) = &web_handle {
+        if let Some(handle) = web_handle {
             let now = Instant::now();
             if now.duration_since(web_tick_last).as_millis() as u64 >= config.web.tick_ms {
                 let elapsed = now.duration_since(web_tick_last).as_secs_f64().max(0.001);
@@ -311,13 +351,11 @@ fn run_capture(
                 let pps = web_tick_packets as f64 / elapsed;
                 let active_flows = flow_tracker.len();
 
-                let top_deltas =
-                    flow_tracker.top_flows_with_snapshot(config.web.top_n);
+                let top_deltas = flow_tracker.top_flows_with_snapshot(config.web.top_n);
                 let top_flows: Vec<web::messages::FlowInfo> = top_deltas
                     .iter()
                     .map(|(delta, snap)| {
-                        let delta_mbps =
-                            delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
+                        let delta_mbps = delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
                         web::messages::FlowInfo {
                             protocol: format!("{}", snap.protocol),
                             src_ip: snap.endpoint_a.ip,
@@ -370,7 +408,7 @@ fn run_capture(
         }
     }
 
-    // Print summary statistics
+    // Print summary
     println!();
     println!("{}", "=".repeat(50));
     println!("Capture complete.");
@@ -384,10 +422,132 @@ fn run_capture(
             0.0
         }
     );
-    println!("{}", "=".repeat(50));
 
     if config.output.export_json.is_some() || config.output.export_csv.is_some() {
         let snapshot = flow_tracker.snapshot();
+        if let Some(path) = &config.output.export_json {
+            flow::write_flow_json(path.as_ref(), &snapshot)?;
+            println!("  Flow export (JSON): {}", path.display());
+        }
+        if let Some(path) = &config.output.export_csv {
+            flow::write_flow_csv(path.as_ref(), &snapshot)?;
+            println!("  Flow export (CSV):  {}", path.display());
+        }
+    }
+
+    Ok(())
+}
+
+/// Sharded pipeline capture loop: the main thread only reads from pcap
+/// and dispatches owned packet buffers to worker shards.
+fn run_capture_pipeline(
+    config: &RuntimeConfig,
+    running: &Arc<AtomicBool>,
+    cap: &mut pcap::Capture<pcap::Active>,
+    mut savefile: Option<&mut pcap::Savefile>,
+    web_handle: Option<&web::server::WebHandle>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let pipeline_cfg = pipeline::PipelineConfig {
+        num_workers: config.pipeline.workers,
+        channel_capacity: config.pipeline.channel_capacity,
+        flow: config.flow.clone(),
+        analysis: config.analysis.clone(),
+        stats: config.stats.clone(),
+        web: config.web.clone(),
+    };
+
+    let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle);
+    let num_workers = pipe.num_workers();
+    println!("Pipeline: {} worker shards", num_workers);
+    println!();
+
+    let mut packet_count: u64 = 0;
+    let mut dispatch_drops: u64 = 0;
+    let mut stats_last = Instant::now();
+
+    while running.load(Ordering::SeqCst) {
+        if config.run.count > 0 && packet_count >= config.run.count {
+            break;
+        }
+
+        let packet = match cap.next_packet() {
+            Ok(packet) => Some(packet),
+            Err(pcap::Error::TimeoutExpired) => None,
+            Err(e) => {
+                tracing::error!(error = %e, "capture error");
+                return Err(Box::new(e));
+            }
+        };
+
+        if let Some(packet) = packet {
+            packet_count += 1;
+
+            let timestamp =
+                packet.header.ts.tv_sec as f64 + packet.header.ts.tv_usec as f64 / 1_000_000.0;
+            let raw_data = packet.data;
+            let wire_len = packet.header.len as u64;
+
+            // Write to pcap file (still on capture thread — fast sequential I/O)
+            if let Some(file) = savefile.as_mut() {
+                file.write(&packet);
+            }
+
+            // Determine shard and dispatch
+            let shard = pipeline::router::shard_for_packet(raw_data, num_workers);
+            let owned = pipeline::OwnedPacket {
+                id: packet_count,
+                ts: timestamp,
+                wire_len,
+                data: raw_data.to_vec(),
+            };
+
+            if pipe.senders[shard].try_send(owned).is_err() {
+                dispatch_drops += 1;
+                tracing::trace!(shard, "worker channel full, dropping packet");
+            }
+        }
+
+        // CLI stats from aggregator
+        let now = Instant::now();
+        if config.stats.enabled
+            && now.duration_since(stats_last).as_millis() as u64 >= config.stats.interval_ms
+        {
+            if let Some(tick) = pipe.aggregator.take_tick() {
+                println!(
+                    "[stats] {:.2} Mbps | {:.0} pps | {} flows",
+                    tick.mbps, tick.pps, tick.active_flows
+                );
+                if config.stats.top_flows > 0 {
+                    let elapsed = (tick.interval_ms as f64 / 1000.0).max(0.001);
+                    for (rank, (delta, _snap)) in tick
+                        .top_flows
+                        .iter()
+                        .enumerate()
+                        .take(config.stats.top_flows as usize)
+                    {
+                        let mbps = delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
+                        println!("  {}. {} {:.2} Mbps", rank + 1, delta.key, mbps);
+                    }
+                }
+            }
+            stats_last = now;
+        }
+    }
+
+    // Shut down the pipeline and collect final snapshots
+    pipe.shutdown();
+
+    // Print summary
+    println!();
+    println!("{}", "=".repeat(50));
+    println!("Capture complete (pipeline mode).");
+    println!("  Packets captured:  {}", packet_count);
+    println!("  Dispatch drops:    {}", dispatch_drops);
+
+    // Export flows from aggregated shard snapshots (shutdown() joins all
+    // worker threads, so snapshots are guaranteed to be present).
+    if config.output.export_json.is_some() || config.output.export_csv.is_some() {
+        let snapshot = pipe.aggregator.take_final_snapshots();
         if let Some(path) = &config.output.export_json {
             flow::write_flow_json(path.as_ref(), &snapshot)?;
             println!("  Flow export (JSON): {}", path.display());
@@ -410,6 +570,7 @@ struct RuntimeConfig {
     stats: config::StatsConfig,
     analysis: config::AnalysisConfig,
     web: config::WebConfig,
+    pipeline: config::PipelineConfig,
     verbose_level: u8,
 }
 
@@ -514,6 +675,15 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
         web.port = value;
     }
 
+    let mut pipeline = base.pipeline.clone();
+    if args.pipeline {
+        pipeline.enabled = true;
+    }
+    if args.workers > 0 {
+        pipeline.workers = args.workers;
+        pipeline.enabled = true;
+    }
+
     Ok(RuntimeConfig {
         capture,
         run,
@@ -522,319 +692,7 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
         stats,
         analysis,
         web,
+        pipeline,
         verbose_level: args.verbose,
     })
-}
-
-fn maybe_analyze_anomaly(
-    detector: &mut analysis::anomaly::AnomalyDetector,
-    ts: f64,
-    packet: &protocol::ParsedPacket<'_>,
-) -> Vec<analysis::anomaly::Alert> {
-    let (src_ip, dst_ip, skip_flow) = match &packet.network {
-        Some(protocol::NetworkHeader::Ipv4(hdr)) => {
-            let skip = hdr.fragment_offset() != 0;
-            (
-                std::net::IpAddr::V4(hdr.src_addr()),
-                std::net::IpAddr::V4(hdr.dst_addr()),
-                skip,
-            )
-        }
-        Some(protocol::NetworkHeader::Ipv6(hdr)) => (
-            std::net::IpAddr::V6(hdr.src_addr()),
-            std::net::IpAddr::V6(hdr.dst_addr()),
-            false,
-        ),
-        None => return Vec::new(),
-    };
-
-    if skip_flow {
-        return Vec::new();
-    }
-
-    let (src_port, dst_port, protocol, tcp_syn, tcp_ack) = match &packet.transport {
-        Some(protocol::TransportHeader::Tcp(hdr)) => (
-            hdr.src_port(),
-            hdr.dst_port(),
-            flow::FlowProtocol::Tcp,
-            hdr.syn(),
-            hdr.ack(),
-        ),
-        Some(protocol::TransportHeader::Udp(hdr)) => (
-            hdr.src_port(),
-            hdr.dst_port(),
-            flow::FlowProtocol::Udp,
-            false,
-            false,
-        ),
-        _ => return Vec::new(),
-    };
-
-    let src = flow::Endpoint {
-        ip: src_ip,
-        port: src_port,
-    };
-    let dst = flow::Endpoint {
-        ip: dst_ip,
-        port: dst_port,
-    };
-
-    detector.observe(ts, protocol, src, dst, tcp_syn, tcp_ack)
-}
-
-// ---------------------------------------------------------------------------
-// Build packet data for the web dashboard
-// ---------------------------------------------------------------------------
-
-fn build_packet_data(
-    id: u64,
-    ts: f64,
-    raw_data: &[u8],
-    parsed: &protocol::ParsedPacket<'_>,
-    max_payload_bytes: usize,
-) -> (web::messages::PacketSample, web::messages::StoredPacket) {
-    // Build one-line summary fields
-    let (proto_str, src_str, dst_str, info_str) = summarise_packet(parsed);
-
-    let sample = web::messages::PacketSample {
-        id,
-        ts,
-        len: raw_data.len(),
-        protocol: proto_str,
-        src: src_str,
-        dst: dst_str,
-        info: info_str,
-    };
-
-    // Build layer details
-    let mut layers = Vec::new();
-
-    // Ethernet
-    {
-        let eth = &parsed.ethernet;
-        layers.push(web::messages::LayerDetail {
-            name: "Ethernet".into(),
-            fields: vec![
-                (
-                    "Source".into(),
-                    protocol::ethernet::format_mac(eth.src_mac()),
-                ),
-                (
-                    "Destination".into(),
-                    protocol::ethernet::format_mac(eth.dst_mac()),
-                ),
-                ("EtherType".into(), format!("{}", eth.ether_type())),
-            ],
-        });
-    }
-
-    // VLAN
-    if let Some(vlan) = &parsed.vlan {
-        layers.push(web::messages::LayerDetail {
-            name: "VLAN (802.1Q)".into(),
-            fields: vec![
-                ("VLAN ID".into(), format!("{}", vlan.vlan_id)),
-                ("Priority".into(), format!("{}", vlan.priority)),
-                ("DEI".into(), format!("{}", vlan.dei)),
-            ],
-        });
-    }
-
-    // Network
-    if let Some(net) = &parsed.network {
-        match net {
-            protocol::NetworkHeader::Ipv4(hdr) => {
-                layers.push(web::messages::LayerDetail {
-                    name: "IPv4".into(),
-                    fields: vec![
-                        ("Source".into(), format!("{}", hdr.src_addr())),
-                        ("Destination".into(), format!("{}", hdr.dst_addr())),
-                        ("Protocol".into(), format!("{}", hdr.protocol())),
-                        ("TTL".into(), format!("{}", hdr.ttl())),
-                        ("Total Length".into(), format!("{}", hdr.total_length())),
-                        ("ID".into(), format!("0x{:04x}", hdr.identification())),
-                        (
-                            "Flags".into(),
-                            format!(
-                                "DF={} MF={}",
-                                hdr.dont_fragment(),
-                                hdr.more_fragments()
-                            ),
-                        ),
-                        ("Fragment Offset".into(), format!("{}", hdr.fragment_offset())),
-                        (
-                            "Checksum".into(),
-                            format!(
-                                "0x{:04x} ({})",
-                                hdr.checksum(),
-                                if hdr.verify_checksum() {
-                                    "valid"
-                                } else {
-                                    "invalid"
-                                }
-                            ),
-                        ),
-                    ],
-                });
-            }
-            protocol::NetworkHeader::Ipv6(hdr) => {
-                layers.push(web::messages::LayerDetail {
-                    name: "IPv6".into(),
-                    fields: vec![
-                        ("Source".into(), format!("{}", hdr.src_addr())),
-                        ("Destination".into(), format!("{}", hdr.dst_addr())),
-                        ("Next Header".into(), format!("{}", hdr.next_header())),
-                        ("Hop Limit".into(), format!("{}", hdr.hop_limit())),
-                        ("Payload Length".into(), format!("{}", hdr.payload_length())),
-                        (
-                            "Flow Label".into(),
-                            format!("0x{:05x}", hdr.flow_label()),
-                        ),
-                    ],
-                });
-            }
-        }
-    }
-
-    // Transport
-    if let Some(transport) = &parsed.transport {
-        match transport {
-            protocol::TransportHeader::Tcp(hdr) => {
-                layers.push(web::messages::LayerDetail {
-                    name: "TCP".into(),
-                    fields: vec![
-                        ("Source Port".into(), format!("{}", hdr.src_port())),
-                        ("Destination Port".into(), format!("{}", hdr.dst_port())),
-                        ("Sequence".into(), format!("{}", hdr.sequence_number())),
-                        ("Acknowledgment".into(), format!("{}", hdr.ack_number())),
-                        ("Flags".into(), hdr.flags_string()),
-                        ("Window".into(), format!("{}", hdr.window_size())),
-                        ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
-                    ],
-                });
-            }
-            protocol::TransportHeader::Udp(hdr) => {
-                layers.push(web::messages::LayerDetail {
-                    name: "UDP".into(),
-                    fields: vec![
-                        ("Source Port".into(), format!("{}", hdr.src_port())),
-                        ("Destination Port".into(), format!("{}", hdr.dst_port())),
-                        ("Length".into(), format!("{}", hdr.length())),
-                        ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
-                    ],
-                });
-            }
-            protocol::TransportHeader::Icmp(hdr) => {
-                layers.push(web::messages::LayerDetail {
-                    name: "ICMP".into(),
-                    fields: vec![
-                        ("Type".into(), format!("{}", hdr.icmp_type())),
-                        ("Code".into(), format!("{}", hdr.code())),
-                        ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
-                    ],
-                });
-            }
-        }
-    }
-
-    // Hex dump (truncated)
-    let dump_len = raw_data.len().min(max_payload_bytes);
-    let hex_dump = format_hex_dump(&raw_data[..dump_len]);
-
-    let stored = web::messages::StoredPacket {
-        id,
-        ts,
-        layers,
-        hex_dump,
-    };
-
-    (sample, stored)
-}
-
-fn summarise_packet(parsed: &protocol::ParsedPacket<'_>) -> (String, String, String, String) {
-    let mut proto;
-    let mut src = String::new();
-    let mut dst = String::new();
-    let mut info = String::new();
-
-    if let Some(net) = &parsed.network {
-        match net {
-            protocol::NetworkHeader::Ipv4(hdr) => {
-                proto = "IPv4".to_string();
-                src = format!("{}", hdr.src_addr());
-                dst = format!("{}", hdr.dst_addr());
-            }
-            protocol::NetworkHeader::Ipv6(hdr) => {
-                proto = "IPv6".to_string();
-                src = format!("{}", hdr.src_addr());
-                dst = format!("{}", hdr.dst_addr());
-            }
-        }
-    } else {
-        proto = format!("{}", parsed.ethernet.ether_type());
-    }
-
-    if let Some(transport) = &parsed.transport {
-        match transport {
-            protocol::TransportHeader::Tcp(hdr) => {
-                proto = "TCP".into();
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
-                info = format!(
-                    "{} seq={} ack={} win={}",
-                    hdr.flags_string(),
-                    hdr.sequence_number(),
-                    hdr.ack_number(),
-                    hdr.window_size()
-                );
-            }
-            protocol::TransportHeader::Udp(hdr) => {
-                proto = "UDP".into();
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
-                info = format!("len={}", hdr.length());
-            }
-            protocol::TransportHeader::Icmp(hdr) => {
-                proto = "ICMP".into();
-                info = format!("{}", hdr);
-            }
-        }
-    }
-
-    (proto, src, dst, info)
-}
-
-/// Format raw bytes as a hex dump string suitable for display.
-fn format_hex_dump(data: &[u8]) -> String {
-    let mut out = String::new();
-    for offset in (0..data.len()).step_by(16) {
-        let end = (offset + 16).min(data.len());
-        let chunk = &data[offset..end];
-
-        out.push_str(&format!("{:04x}  ", offset));
-
-        for (i, byte) in chunk.iter().enumerate() {
-            out.push_str(&format!("{:02x} ", byte));
-            if i == 7 {
-                out.push(' ');
-            }
-        }
-        for i in chunk.len()..16 {
-            out.push_str("   ");
-            if i == 7 {
-                out.push(' ');
-            }
-        }
-
-        out.push_str(" |");
-        for byte in chunk {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                out.push(*byte as char);
-            } else {
-                out.push('.');
-            }
-        }
-        out.push_str("|\n");
-    }
-    out
 }

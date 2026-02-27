@@ -6,6 +6,7 @@ High-performance packet capture and protocol analysis tool built in Rust.
 
 - **Live packet capture** via libpcap with BPF filter support
 - **Zero-copy protocol parsing** for Ethernet (+ 802.1Q VLAN), IPv4, IPv6, TCP, UDP, ICMP
+- **Sharded pipeline** -- multi-core packet processing with lock-free per-shard flow tracking and anomaly detection
 - **Flow tracking** with bidirectional byte/packet counters, TCP state machine, and automatic expiration
 - **TCP analysis** -- RTT estimation (EWMA), retransmission detection, out-of-order segment detection
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds and cooldowns
@@ -13,12 +14,14 @@ High-performance packet capture and protocol analysis tool built in Rust.
 - **Export** -- flow table to JSON or CSV, alerts to JSON lines, raw packets to pcap
 - **TOML configuration** with full CLI override support (including `--no-*` flags for booleans)
 - **Periodic throughput stats** with top-N flows by bandwidth delta
+- **Fast hashing** -- ahash-backed flow tables and anomaly maps for reduced per-packet overhead
+- **Optimized top-N** -- partial selection (`select_nth_unstable_by`) instead of full table sorts
 
 ## Build
 
 Requirements:
 
-- Rust 1.70+
+- Rust 1.85+ (edition 2024)
 - libpcap
 
 Install libpcap:
@@ -91,6 +94,24 @@ Combine with other options:
 sudo cargo run -- --web --web-port 9090 --quiet --anomalies
 ```
 
+Enable the sharded pipeline for multi-core processing (auto-detect worker count):
+
+```bash
+sudo cargo run -- --pipeline --quiet --stats --top-flows 5
+```
+
+Specify the number of pipeline worker threads:
+
+```bash
+sudo cargo run -- --pipeline --workers 4 --quiet --stats
+```
+
+Pipeline mode with the web dashboard:
+
+```bash
+sudo cargo run -- --pipeline --web --quiet --anomalies
+```
+
 Use a configuration file with CLI overrides:
 
 ```bash
@@ -139,6 +160,8 @@ Options:
       --no-web                       Disable the web dashboard
       --web-bind <ADDR>              Web dashboard bind address (default: 127.0.0.1)
       --web-port <PORT>              Web dashboard port (default: 8080)
+      --pipeline                     Enable the sharded pipeline for multi-core processing
+      --workers <N>                  Number of pipeline worker threads (0 = auto, default: 0)
   -h, --help                         Print help
   -V, --version                      Print version
 ```
@@ -192,8 +215,68 @@ See `netscope.example.toml` for a complete example.
 | | `packet_buffer` | int | `2000` | Packets kept for detail inspection |
 | | `sample_rate` | int | `1` | Sample every Nth packet (0 = disable feed) |
 | | `payload_bytes` | int | `256` | Max payload bytes stored per packet |
+| `[pipeline]` | `enabled` | bool | `false` | Enable sharded pipeline |
+| | `workers` | int | `0` | Worker threads (0 = auto: half of CPUs, clamped 1..8) |
+| | `channel_capacity` | int | `4096` | Bounded channel size per shard |
 
 Empty strings in path fields (e.g., `write_pcap = ""`) are treated as disabled.
+
+## Sharded Pipeline
+
+When enabled (`--pipeline`), NetScope splits packet processing across multiple worker threads for higher throughput on multi-core machines. The capture thread does minimal work -- it reads packets from libpcap, extracts a fast 5-tuple hash from raw bytes, and dispatches each packet to the appropriate shard via bounded crossbeam channels. Each worker shard owns its own `FlowTracker` and `AnomalyDetector`, so the hot path is completely lock-free.
+
+### Architecture
+
+```
+pcap capture (main thread)
+  |
+  |-- extract 5-tuple hash -> shard = hash % N
+  |
+  +--[bounded channel]---> Worker 0  (parse, flow, anomaly)
+  +--[bounded channel]---> Worker 1
+  ...
+  +--[bounded channel]---> Worker N-1
+                              |
+Workers --[unbounded channel]---> Aggregator thread
+                                    |
+                                    +---> CLI stats (merged ticks)
+                                    +---> Web dashboard events
+```
+
+All packets for the same 5-tuple always land on the same shard, guaranteeing correctness for flow tracking and TCP state. The aggregator merges per-shard tick data into global statistics and forwards events to the CLI and web dashboard.
+
+### Configuration
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `workers` | `0` (auto) | Number of shards. Auto mode uses half of CPU count, clamped to 1..8 |
+| `channel_capacity` | `4096` | Per-shard bounded channel size. When full, packets are dropped and counted as dispatch drops |
+
+When the pipeline is active, kernel pcap stats (received/dropped/if_dropped) and dispatch drop counts are printed at capture exit.
+
+### Performance
+
+Portable optimizations applied to the hot path:
+
+- **ahash** (`AHashMap`/`AHashSet`) replaces `std::HashMap` in the flow table and anomaly detector maps, reducing per-lookup hashing cost.
+- **Partial top-N selection** uses `select_nth_unstable_by` to partition the top-N elements and then sorts only that slice, avoiding a full O(n log n) sort of the entire flow table each tick.
+- **Minimal shard routing** extracts the 5-tuple from raw packet bytes at fixed offsets (no full parse) to keep the capture thread lean.
+
+Criterion benchmark baselines (Apple M-series, `cargo bench`):
+
+| Benchmark | Latency | Throughput |
+|-----------|---------|------------|
+| `parse_packet` (54B TCP SYN) | ~3.5 ns | ~289M pkt/s |
+| `parse_packet` (1454B TCP data) | ~3.5 ns | ~283M pkt/s |
+| `flow_observe` (existing flow) | ~13.5 ns | ~74M pkt/s |
+| `flow_observe` (new flow) | ~89 ns | ~11M pkt/s |
+| `shard_routing` (4 shards) | ~3.9 ns | ~257M pkt/s |
+
+Run benchmarks with:
+
+```bash
+cargo bench
+```
 
 ## Web Dashboard
 
@@ -211,18 +294,18 @@ The web dashboard provides a real-time browser interface for monitoring captured
 
 ### Architecture
 
-The web server runs in a dedicated thread with its own tokio runtime. The capture loop on the main thread pushes events through an `mpsc` channel. The server broadcasts to all connected WebSocket clients. This design keeps the capture path lock-free and unaffected by dashboard load.
+In inline mode (default), the capture loop on the main thread pushes events directly through an `mpsc` channel to the web server. In pipeline mode, the aggregator thread merges shard events and forwards them to the same channel. Either way, the web server runs in a dedicated thread with its own tokio runtime and broadcasts to all connected WebSocket clients.
 
 ```
-Capture thread (main)              Web server thread (tokio)
-  |                                  |
-  |-- mpsc channel ----------------> ingest task
-  |   (StatsTick, PacketSample,        |
-  |    PacketStored, Alert)          broadcast channel
-  |                                    |
-  |                                  WS client 1
-  |                                  WS client 2
-  |                                  ...
+Inline mode:                       Pipeline mode:
+
+Capture thread (main)              Capture thread -> Worker shards
+  |                                                    |
+  |-- mpsc channel -->  Web server   Aggregator --mpsc channel-->  Web server
+  |   (Tick, Packet,      |             |                             |
+  |    Alert, ...)       broadcast     merges ticks                 broadcast
+  |                        |                                          |
+  |                      WS clients                                WS clients
 ```
 
 The frontend is embedded into the binary via `rust-embed`, so `--web` works with no external files or build steps.

@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2024"
 description = "High-performance network packet capture and protocol analysis tool"
 
+[lib]
+name = "netscope"
+path = "src/lib.rs"
+
+[[bin]]
+name = "netscope"
+path = "src/main.rs"
+
 [dependencies]
 # Packet capture
 pcap = "2"
@@ -26,9 +34,25 @@ ctrlc = "3"
 # Formatting
 hex = "0.4"
 
+# Fast hashing (portable performance)
+ahash = "0.8"
+
+# Lock-free channels for sharded pipeline
+crossbeam-channel = "0.5"
+
+# CPU topology
+num_cpus = "1"
+
 # Web dashboard
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "hot_path"
+harness = false

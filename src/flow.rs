@@ -1,7 +1,8 @@
 use crate::protocol::{NetworkHeader, ParsedPacket, TransportHeader};
+use ahash::AHashMap;
 use serde::Serialize;
 use std::cmp::Ordering;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fmt;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -304,7 +305,7 @@ pub struct FlowDelta {
 
 #[derive(Debug)]
 pub struct FlowTracker {
-    flows: HashMap<FlowKey, FlowEntry>,
+    flows: AHashMap<FlowKey, FlowEntry>,
     timeout_secs: f64,
     max_flows: usize,
     last_prune: f64,
@@ -322,7 +323,7 @@ impl FlowTracker {
         track_out_of_order: bool,
     ) -> Self {
         FlowTracker {
-            flows: HashMap::new(),
+            flows: AHashMap::new(),
             timeout_secs,
             max_flows,
             last_prune: 0.0,
@@ -452,7 +453,6 @@ impl FlowTracker {
         if n == 0 {
             return Vec::new();
         }
-        // Compute deltas without mutating counters
         let mut deltas: Vec<FlowDelta> = self
             .flows
             .iter()
@@ -469,15 +469,22 @@ impl FlowTracker {
                 }
             })
             .collect();
-        deltas.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
-        let top: Vec<FlowDelta> = deltas.into_iter().take(n).collect();
+
+        // O(F) partial sort: partition so the top-N are at the front, then sort only those.
+        let top_n = n.min(deltas.len());
+        if top_n > 0 && top_n < deltas.len() {
+            deltas.select_nth_unstable_by(top_n - 1, |a, b| b.delta_bytes.cmp(&a.delta_bytes));
+            deltas.truncate(top_n);
+        }
+        deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+
         // Only reset counters for the flows we're reporting
-        for d in &top {
+        for d in &deltas {
             if let Some(entry) = self.flows.get_mut(&d.key) {
                 entry.last_report_bytes_stats = entry.total_bytes();
             }
         }
-        top
+        deltas
     }
 
     /// Return top-N flows by delta bytes, paired with their full snapshot.
@@ -505,11 +512,17 @@ impl FlowTracker {
                 }
             })
             .collect();
-        deltas.sort_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
-        let top: Vec<FlowDelta> = deltas.into_iter().take(n).collect();
 
-        let mut result = Vec::with_capacity(top.len());
-        for d in top {
+        // O(F) partial sort: partition so the top-N are at the front, then sort only those.
+        let top_n = n.min(deltas.len());
+        if top_n > 0 && top_n < deltas.len() {
+            deltas.select_nth_unstable_by(top_n - 1, |a, b| b.delta_bytes.cmp(&a.delta_bytes));
+            deltas.truncate(top_n);
+        }
+        deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+
+        let mut result = Vec::with_capacity(deltas.len());
+        for d in deltas {
             if let Some(entry) = self.flows.get_mut(&d.key) {
                 entry.last_report_bytes_web = entry.total_bytes();
                 let snap = FlowSnapshot::from_entry(&d.key, entry);
