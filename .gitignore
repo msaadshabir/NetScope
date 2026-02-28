@@ -1,1 +1,56 @@
-/target
+# --- Rust build artifacts ---
+/target/
+**/*.rs.bk
+
+# --- Dependency lockfile ---
+# Keep Cargo.lock tracked for binaries/apps.
+# Uncomment the next line only if this repository is intended to be a library crate.
+# Cargo.lock
+
+# --- Local configuration / secrets ---
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.local
+
+# --- Logs and runtime output ---
+*.log
+logs/
+netscope.log
+
+# --- Temporary files ---
+/tmp/
+*.tmp
+*.temp
+
+# --- Coverage, profiling, and analysis outputs ---
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.lcov
+*.coverage
+coverage/
+
+# --- Benchmark outputs ---
+criterion/
+
+# --- IDE / editor ---
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.iml
+
+# --- OS files ---
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# --- Misc caches ---
+.cache/
+.sass-cache/
+node_modules/
