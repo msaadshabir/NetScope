@@ -8,7 +8,6 @@ netscope/
   netscope.example.toml         # Complete example config file
   LICENSE                       # MIT License
   README.md                     # Project landing page
-  CONTRIBUTING.md               # Contribution guidelines
   CHANGELOG.md                  # Release history
   docs/                         # Documentation (this directory)
   benches/
@@ -113,12 +112,12 @@ All protocol parsers follow the same pattern: borrow the byte slice, validate mi
 
 NetScope uses the `tracing` crate for structured logging. Log levels:
 
-| Level | Controlled by | What's logged |
-|---|---|---|
-| WARN | default | Warnings and errors |
-| INFO | `-v` | Capture start/stop, interface selection, web server URL |
-| DEBUG | `-vv` | Config resolution, parse errors per packet |
-| TRACE | `-vvv` | Per-packet traces, channel drops, aggregator events |
+| Level | Controlled by | What's logged                                           |
+| ----- | ------------- | ------------------------------------------------------- |
+| WARN  | default       | Warnings and errors                                     |
+| INFO  | `-v`          | Capture start/stop, interface selection, web server URL |
+| DEBUG | `-vv`         | Config resolution, parse errors per packet              |
+| TRACE | `-vvv`        | Per-packet traces, channel drops, aggregator events     |
 
 Add logging with:
 

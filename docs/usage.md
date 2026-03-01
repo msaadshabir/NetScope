@@ -2,7 +2,7 @@
 
 This page shows common NetScope workflows. For the full flag list, see [CLI Reference](cli-reference.md). For persistent configuration, see [Configuration](configuration.md).
 
-All examples assume the binary is on your PATH as `netscope`. Substitute `sudo cargo run --release --` during development.
+All examples assume the binary is on your PATH as `netscope`. Substitute `netscope` with `sudo cargo run --release --` during development.
 
 ## Basic Capture
 
@@ -116,12 +116,12 @@ CLI flags always override config file values when explicitly provided. See [Conf
 
 Control log output with `-v` flags:
 
-| Flag | Level | What you see |
-|---|---|---|
-| (none) | WARN | Warnings and errors only |
-| `-v` | INFO | Capture start/stop, interface info |
-| `-vv` | DEBUG | Detailed packet output, config resolution |
-| `-vvv` | TRACE | Per-packet trace logs, channel drops |
+| Flag   | Level | What you see                              |
+| ------ | ----- | ----------------------------------------- |
+| (none) | WARN  | Warnings and errors only                  |
+| `-v`   | INFO  | Capture start/stop, interface info        |
+| `-vv`  | DEBUG | Detailed packet output, config resolution |
+| `-vvv` | TRACE | Per-packet trace logs, channel drops      |
 
 ```bash
 sudo netscope -vv

@@ -7,12 +7,12 @@
 
 ### Installing libpcap
 
-| Platform | Command |
-|---|---|
-| macOS | Ships with the OS. Install Xcode Command Line Tools (`xcode-select --install`) if headers are missing. |
-| Debian / Ubuntu | `sudo apt-get install libpcap-dev` |
-| Fedora | `sudo dnf install libpcap-devel` |
-| Arch Linux | `sudo pacman -S libpcap` |
+| Platform        | Command                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| macOS           | Ships with the OS. Install Xcode Command Line Tools (`xcode-select --install`) if headers are missing. |
+| Debian / Ubuntu | `sudo apt-get install libpcap-dev`                                                                     |
+| Fedora          | `sudo dnf install libpcap-devel`                                                                       |
+| Arch Linux      | `sudo pacman -S libpcap`                                                                               |
 
 ## Building
 
@@ -84,15 +84,15 @@ sudo netscope -f "tcp port 443"
 sudo netscope --web --quiet
 ```
 
-Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output so the dashboard is the primary interface.
+Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.
 
 ## Supported Protocols
 
-| Layer | Protocols |
-|---|---|
-| Link | Ethernet II, 802.1Q VLAN |
-| Network | IPv4 (with checksum verification), IPv6 |
-| Transport | TCP, UDP, ICMP |
+| Layer     | Protocols                               |
+| --------- | --------------------------------------- |
+| Link      | Ethernet II, 802.1Q VLAN                |
+| Network   | IPv4 (with checksum verification), IPv6 |
+| Transport | TCP, UDP, ICMP                          |
 
 **Known limitations:**
 
