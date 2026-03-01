@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
-- `CONTRIBUTING.md` since external contributor workflows are not needed.
+- `CONTRIBUTING.md`
 - `docs/index.md` as it was fully redundant with the main `README.md` documentation table.
 
 ## [0.1.0] - 2026-02-27
