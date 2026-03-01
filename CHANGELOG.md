@@ -4,6 +4,17 @@ All notable changes to NetScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- Refined documentation wording and improved markdown structure in `README.md`, `docs/getting-started.md`, and `docs/usage.md`.
+
+### Removed
+
+- `CONTRIBUTING.md` since external contributor workflows are not needed.
+- `docs/index.md` as it was fully redundant with the main `README.md` documentation table.
+
 ## [0.1.0] - 2026-02-27
 
 ### Added
