@@ -64,7 +64,7 @@ export_json = ""    # disabled
 | Key            | Type  | Default  | Description                                                                    |
 | -------------- | ----- | -------- | ------------------------------------------------------------------------------ |
 | `timeout_secs` | float | `60.0`   | Flow inactivity timeout in seconds. 0 = never expire.                          |
-| `max_flows`    | int   | `100000` | Maximum tracked flows. When exceeded, oldest flows are evicted. 0 = unlimited. |
+| `max_flows`    | int   | `100000` | Maximum tracked flows. When exceeded, oldest flows are evicted. 0 = unlimited. Used to pre-size the flow table at startup (memory reserved up front). |
 
 ### `[stats]`
 

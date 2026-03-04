@@ -28,9 +28,9 @@ pub mod worker;
 
 use crate::config::{AnalysisConfig, FlowConfig, StatsConfig, WebConfig};
 use crate::web;
-use crossbeam_channel::{bounded, Sender};
-use std::sync::atomic::AtomicBool;
+use crossbeam_channel::{Sender, bounded};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::thread;
 
 pub use aggregator::AggregatorHandle;

@@ -3,7 +3,7 @@
 //! Formats parsed packets into human-readable one-line summaries
 //! and optional detailed views with hex dumps.
 
-use crate::protocol::{self, ethernet, NetworkHeader, ParsedPacket, TransportHeader};
+use crate::protocol::{self, NetworkHeader, ParsedPacket, TransportHeader, ethernet};
 
 /// Print a one-line summary of a parsed packet.
 pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_>) {

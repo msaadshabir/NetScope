@@ -140,13 +140,12 @@ pub fn build_packet_data(
                         ("ID".into(), format!("0x{:04x}", hdr.identification())),
                         (
                             "Flags".into(),
-                            format!(
-                                "DF={} MF={}",
-                                hdr.dont_fragment(),
-                                hdr.more_fragments()
-                            ),
+                            format!("DF={} MF={}", hdr.dont_fragment(), hdr.more_fragments()),
                         ),
-                        ("Fragment Offset".into(), format!("{}", hdr.fragment_offset())),
+                        (
+                            "Fragment Offset".into(),
+                            format!("{}", hdr.fragment_offset()),
+                        ),
                         (
                             "Checksum".into(),
                             format!(
@@ -171,10 +170,7 @@ pub fn build_packet_data(
                         ("Next Header".into(), format!("{}", hdr.next_header())),
                         ("Hop Limit".into(), format!("{}", hdr.hop_limit())),
                         ("Payload Length".into(), format!("{}", hdr.payload_length())),
-                        (
-                            "Flow Label".into(),
-                            format!("0x{:05x}", hdr.flow_label()),
-                        ),
+                        ("Flow Label".into(), format!("0x{:05x}", hdr.flow_label())),
                     ],
                 });
             }

@@ -12,6 +12,7 @@ The hot path uses several performance-focused design choices:
 - **Minimal shard routing** -- the capture thread extracts the 5-tuple from raw packet bytes at fixed offsets (no full protocol parse) to keep the dispatch path as lean as possible.
 - **Lock-free workers** -- each pipeline worker owns its own `FlowTracker` and `AnomalyDetector`, eliminating contention on the hot path.
 - **Bounded channels** -- crossbeam bounded channels provide backpressure without allocations on the fast path.
+- **Flow table pre-sizing** -- `FlowTracker` reserves hash map capacity based on `flow.max_flows` to avoid rehashing/resizes during steady-state capture.
 
 ## Benchmark Results
 
@@ -19,13 +20,16 @@ Criterion benchmarks measured on Apple M-series (`cargo bench`):
 
 | Benchmark | Latency | Throughput |
 |---|---|---|
-| `parse_packet` (54B TCP SYN) | ~3.5 ns | ~289M pkt/s |
-| `parse_packet` (1454B TCP data) | ~3.5 ns | ~283M pkt/s |
-| `flow_observe` (existing flow) | ~13.5 ns | ~74M pkt/s |
-| `flow_observe` (new flow) | ~89 ns | ~11M pkt/s |
-| `shard_routing` (4 shards) | ~3.9 ns | ~257M pkt/s |
+| `parse_packet` (54B TCP SYN) | ~5.8 ns | ~172M pkt/s |
+| `parse_packet` (1454B TCP data) | ~5.8 ns | ~173M pkt/s |
+| `flow_observe` (existing flow) | ~25 ns | ~40M pkt/s |
+| `flow_observe` (new flow, cold setup) | ~7.7 us | ~130k pkt/s |
+| `shard_routing` (4 shards) | ~4.1 ns | ~246M pkt/s |
+| `handshake_sequence` (SYN → SYN-ACK → ACK) | ~105 ns/pkt | ~9.6M pkt/s |
 
-These numbers reflect isolated function-level performance. Actual capture throughput depends on the OS, NIC driver, libpcap configuration, and workload.
+These numbers reflect isolated function-level performance measured by Criterion and will vary by CPU, compiler version, and background load.
+The `flow_observe (new flow, cold setup)` benchmark includes flow tracker setup and is intended to represent a cold-path baseline rather than steady-state capture.
+Actual capture throughput depends on the OS, NIC driver, libpcap configuration, and workload.
 
 ## Running Benchmarks
 
@@ -41,6 +45,7 @@ To run a specific benchmark:
 cargo bench -- parse_packet
 cargo bench -- flow_observe
 cargo bench -- shard_routing
+cargo bench -- handshake_sequence
 ```
 
 ## Tuning Checklist

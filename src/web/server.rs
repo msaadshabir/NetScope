@@ -20,11 +20,9 @@ use axum::{
 };
 use rust_embed::Embed;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, Mutex};
+use tokio::sync::{Mutex, broadcast, mpsc};
 
-use super::messages::{
-    CaptureEvent, PacketDetail, WsClientMsg, WsServerMsg,
-};
+use super::messages::{CaptureEvent, PacketDetail, WsClientMsg, WsServerMsg};
 use super::packet_store::PacketStore;
 
 // ---------------------------------------------------------------------------
@@ -167,10 +165,7 @@ async fn health_handler() -> &'static str {
     "ok"
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
 }
 

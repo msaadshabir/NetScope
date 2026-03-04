@@ -131,6 +131,7 @@ impl FlowEntry {
         }
     }
 
+    #[inline]
     fn observe(&mut self, ts: f64, direction: FlowDirection, bytes: u64, flags: Option<TcpFlags>) {
         self.last_seen = ts;
         match direction {
@@ -159,8 +160,12 @@ impl FlowEntry {
         track_retrans: bool,
         track_out_of_order: bool,
     ) {
-        // Collect RTT samples and update seq trackers first, then apply to self.
-        let mut rtt_samples = Vec::new();
+        // Accumulate RTT updates and seq-tracker deltas into plain scalars so
+        // no heap allocation is needed on the hot path.
+        let mut rtt_last: Option<f64> = None;
+        let mut rtt_min: Option<f64> = None;
+        let mut rtt_ewma: Option<f64> = self.rtt_ewma_ms;
+        let mut rtt_count: u64 = 0;
         let mut retrans_delta: u64 = 0;
         let mut ooo_delta: u64 = 0;
 
@@ -172,7 +177,20 @@ impl FlowEntry {
 
             if let Some(ack_no) = ack {
                 if track_rtt {
-                    rtt_samples = receiver.on_ack(ts, ack_no);
+                    // Stream RTT samples via callback — no Vec allocation.
+                    let rtt_min_prev = self.rtt_min_ms;
+                    receiver.on_ack(ts, ack_no, |rtt_ms| {
+                        rtt_last = Some(rtt_ms);
+                        rtt_min = Some(match rtt_min_prev.or(rtt_min) {
+                            Some(prev_min) => prev_min.min(rtt_ms),
+                            None => rtt_ms,
+                        });
+                        rtt_ewma = Some(match rtt_ewma {
+                            Some(prev) => 0.875 * prev + 0.125 * rtt_ms,
+                            None => rtt_ms,
+                        });
+                        rtt_count += 1;
+                    });
                 }
                 if track_retrans || track_out_of_order {
                     receiver.last_ack = Some(ack_no);
@@ -203,22 +221,17 @@ impl FlowEntry {
             }
         }
 
-        for rtt_ms in rtt_samples {
-            self.record_rtt(rtt_ms);
+        // Write RTT results back to self — no intermediate Vec needed.
+        if rtt_count > 0 {
+            self.rtt_last_ms = rtt_last;
+            if let Some(m) = rtt_min {
+                self.rtt_min_ms = Some(self.rtt_min_ms.map_or(m, |prev| prev.min(m)));
+            }
+            self.rtt_ewma_ms = rtt_ewma;
+            self.rtt_samples += rtt_count;
         }
         self.retransmissions += retrans_delta;
         self.out_of_order += ooo_delta;
-    }
-
-    fn record_rtt(&mut self, rtt_ms: f64) {
-        self.rtt_last_ms = Some(rtt_ms);
-        self.rtt_min_ms = Some(self.rtt_min_ms.map_or(rtt_ms, |min| min.min(rtt_ms)));
-        let ewma = match self.rtt_ewma_ms {
-            Some(prev) => 0.875 * prev + 0.125 * rtt_ms,
-            None => rtt_ms,
-        };
-        self.rtt_ewma_ms = Some(ewma);
-        self.rtt_samples += 1;
     }
 
     fn total_bytes(&self) -> u64 {
@@ -322,8 +335,15 @@ impl FlowTracker {
         track_retrans: bool,
         track_out_of_order: bool,
     ) -> Self {
+        // Pre-size the map to avoid rehash churn on the hot path.
+        // Add 25% headroom so inserts near `max_flows` don't trigger a resize.
+        let initial_capacity = if max_flows > 0 {
+            max_flows + max_flows / 4
+        } else {
+            0
+        };
         FlowTracker {
-            flows: AHashMap::new(),
+            flows: AHashMap::with_capacity(initial_capacity),
             timeout_secs,
             max_flows,
             last_prune: 0.0,
@@ -337,6 +357,7 @@ impl FlowTracker {
         self.flows.len()
     }
 
+    #[inline]
     pub fn observe(&mut self, ts: f64, wire_len: u64, packet: &ParsedPacket<'_>) {
         let (src_ip, dst_ip, skip_flow) = match &packet.network {
             Some(NetworkHeader::Ipv4(hdr)) => {
@@ -787,18 +808,16 @@ impl TcpSeqTracker {
         }
     }
 
-    fn on_ack(&mut self, ts: f64, ack_no: u32) -> Vec<f64> {
-        let mut samples = Vec::new();
+    fn on_ack<F: FnMut(f64)>(&mut self, ts: f64, ack_no: u32, mut cb: F) {
         while let Some(front) = self.in_flight.front() {
             if front.seq_end.wrapping_sub(ack_no) as i32 <= 0 {
                 let sample = self.in_flight.pop_front().unwrap();
                 let rtt_ms = (ts - sample.ts).max(0.0) * 1000.0;
-                samples.push(rtt_ms);
+                cb(rtt_ms);
             } else {
                 break;
             }
         }
-        samples
     }
 
     fn push_sample(&mut self, seq_end: u32, ts: f64) {
@@ -947,7 +966,8 @@ mod tests {
     fn tcp_seq_tracker_rtt_sample() {
         let mut tracker = TcpSeqTracker::new();
         tracker.push_sample(1100, 1.0);
-        let samples = tracker.on_ack(1.05, 1100);
+        let mut samples = Vec::new();
+        tracker.on_ack(1.05, 1100, |rtt| samples.push(rtt));
         assert_eq!(samples.len(), 1);
         assert!(samples[0] >= 50.0);
     }

@@ -107,6 +107,8 @@ In practice, this means pipeline mode is less sensitive to anomalies than inline
 
 The configured `max_flows` limit applies to each worker independently. With 4 workers and `max_flows = 100000`, the effective global limit is 400,000 flows. This means pipeline mode can use more memory for flow tracking than the configured value suggests.
 
+NetScope also pre-sizes each shard's flow table based on `max_flows`, so a higher value can increase memory reserved at startup even before the flow table fills.
+
 ### No per-packet CLI output
 
 Pipeline mode does not support per-packet terminal output (`--quiet` is effectively always on for the packet display). Stats and the web dashboard work normally.

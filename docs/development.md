@@ -78,6 +78,9 @@ Benchmarks are in `benches/hot_path.rs` using Criterion. They measure:
 - `parse_packet` -- full protocol stack parsing (Ethernet + IPv4 + TCP).
 - `flow_observe` -- flow table lookup and update for existing and new flows.
 - `shard_routing` -- 5-tuple extraction and hash computation.
+- `handshake_sequence` -- combined `parse_packet + FlowTracker::observe` for a full TCP 3-way handshake (SYN → SYN-ACK → ACK).
+
+Note: `flow_observe (new flow)` includes flow tracker setup and is sensitive to changes like flow table pre-sizing. Use it as a cold-path baseline rather than a steady-state throughput proxy.
 
 HTML reports are generated in `target/criterion/`.
 

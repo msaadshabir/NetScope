@@ -182,6 +182,7 @@ pub enum TransportHeader<'a> {
 
 /// Parse a complete packet from raw bytes.
 /// This is the main entry point for the protocol stack.
+#[inline]
 pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
     // Layer 2: Ethernet
     let eth = ethernet::EthernetHeader::parse(data)?;
