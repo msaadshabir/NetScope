@@ -6,9 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Criterion benchmark `handshake_sequence` to measure the combined hot path for a TCP 3-way handshake (SYN -> SYN-ACK -> ACK).
+
 ### Changed
 
-- Refined documentation wording and improved markdown structure in `README.md`, `docs/getting-started.md`, and `docs/usage.md`.
+- Flow tracking now pre-sizes the flow table based on `flow.max_flows` to reduce hash map resizes during capture.
+- TCP RTT analysis avoids per-call heap allocation by streaming RTT samples from ACK handling without buffering.
+- Updated documentation for performance benchmarks and flow table sizing behavior.
 
 ### Removed
 
