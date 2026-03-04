@@ -46,10 +46,10 @@ Shard routing uses canonical endpoint ordering (always hashing `(min, max)` rega
 
 ## Configuration
 
-| Key | Default | Description |
-|---|---|---|
-| `workers` | `0` (auto) | Number of worker shards. Auto mode uses half of CPU count, clamped to 1..8. |
-| `channel_capacity` | `4096` | Per-shard bounded channel size. When a channel is full, the packet is dropped and counted as a "dispatch drop". |
+| Key                | Default    | Description                                                                                                     |
+| ------------------ | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| `workers`          | `0` (auto) | Number of worker shards. Auto mode uses half of CPU count, clamped to 1..8.                                     |
+| `channel_capacity` | `4096`     | Per-shard bounded channel size. When a channel is full, the packet is dropped and counted as a "dispatch drop". |
 
 Set in the `[pipeline]` section of the config file, or via `--pipeline` / `--workers` CLI flags.
 
@@ -77,7 +77,9 @@ Each worker emits a partial tick containing its byte/packet counts and top flows
 - Top flows are merged across shards and re-sorted globally.
 - The tick interval is effectively paced by the slowest shard.
 
-The aggregator enforces a minimum tick interval of 500ms per worker to prevent excessive event throughput.
+In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls.
+
+Note: the merged tick cadence is still gated by the slowest/idle shard until the aggregator timeout work (plan item A.5) is implemented.
 
 ## Shutdown Behavior
 

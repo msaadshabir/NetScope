@@ -20,11 +20,11 @@ Then open <http://127.0.0.1:8080>.
 
 ## Endpoints
 
-| Path | Method | Description |
-|---|---|---|
-| `/` | GET | Serves the dashboard HTML (embedded in the binary via `rust-embed`). |
-| `/ws` | GET | WebSocket endpoint for real-time data. |
-| `/api/health` | GET | Health check, returns `200 OK`. |
+| Path          | Method | Description                                                          |
+| ------------- | ------ | -------------------------------------------------------------------- |
+| `/`           | GET    | Serves the dashboard HTML (embedded in the binary via `rust-embed`). |
+| `/ws`         | GET    | WebSocket endpoint for real-time data.                               |
+| `/api/health` | GET    | Health check, returns `200 OK`.                                      |
 
 The frontend is embedded into the binary at compile time -- no external files or build steps are needed.
 
@@ -52,13 +52,13 @@ In both modes, the web server runs in a dedicated thread with its own tokio runt
 
 The server sends JSON messages to clients, each with a `"type"` field:
 
-| Type | Description |
-|---|---|
-| `hello` | Sent on connect. Contains `version` and `tick_ms`. |
-| `stats_tick` | Periodic aggregate statistics (throughput, pps, active flows, top flows). |
-| `packet_sample` | A sampled packet summary (id, timestamp, protocol, src, dst, info). |
+| Type            | Description                                                                  |
+| --------------- | ---------------------------------------------------------------------------- |
+| `hello`         | Sent on connect. Contains `version` and `tick_ms`.                           |
+| `stats_tick`    | Periodic aggregate statistics (throughput, pps, active flows, top flows).    |
+| `packet_sample` | A sampled packet summary (id, timestamp, protocol, src, dst, info).          |
 | `packet_detail` | Full protocol tree and hex dump for a specific packet (requested by client). |
-| `alert` | Anomaly alert (timestamp, kind, description). |
+| `alert`         | Anomaly alert (timestamp, kind, description).                                |
 
 Clients can request packet details by sending:
 
@@ -70,13 +70,13 @@ The server looks up the packet in its ring buffer and responds with a `packet_de
 
 ## Configuration
 
-| Key | Default | Description |
-|---|---|---|
-| `tick_ms` | `1000` | How often stats are pushed to clients (milliseconds). |
-| `top_n` | `10` | Number of top flows included in each stats tick. |
-| `packet_buffer` | `2000` | Ring buffer size for packet detail lookups. Only the most recent N packets are retained. |
-| `sample_rate` | `1` | Send every Nth packet to the UI. Set to 0 to disable the live packet feed. Increase this at high capture rates to reduce browser load. |
-| `payload_bytes` | `256` | Maximum raw bytes stored per packet for hex dump display. |
+| Key             | Default | Description                                                                                                                            |
+| --------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `tick_ms`       | `1000`  | How often stats are pushed to clients (milliseconds). Minimum 16ms (use 33ms for ~30fps).                                              |
+| `top_n`         | `10`    | Number of top flows included in each stats tick.                                                                                       |
+| `packet_buffer` | `2000`  | Ring buffer size for packet detail lookups. Only the most recent N packets are retained.                                               |
+| `sample_rate`   | `1`     | Send every Nth packet to the UI. Set to 0 to disable the live packet feed. Increase this at high capture rates to reduce browser load. |
+| `payload_bytes` | `256`   | Maximum raw bytes stored per packet for hex dump display.                                                                              |
 
 These can be set in the `[web]` section of the config file. `--web-bind` and `--web-port` are available as CLI flags; the other keys require a config file.
 

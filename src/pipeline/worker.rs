@@ -107,7 +107,7 @@ impl Worker {
 
             // Use recv_timeout so we still emit ticks during traffic lulls
             // and can check the running flag periodically.
-            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+            match rx.recv_timeout(std::time::Duration::from_millis(10)) {
                 Ok(pkt) => {
                     self.process_packet(&pkt, &agg_tx);
                 }
@@ -184,7 +184,7 @@ impl Worker {
 
     fn maybe_emit_tick(&mut self, agg_tx: &Sender<WorkerEvent>) {
         let now = Instant::now();
-        if now.duration_since(self.tick_last).as_millis() as u64 >= self.web_cfg.tick_ms.max(500) {
+        if now.duration_since(self.tick_last).as_millis() as u64 >= self.web_cfg.tick_ms {
             self.emit_tick(agg_tx);
         }
     }

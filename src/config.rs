@@ -64,7 +64,9 @@ impl Default for Config {
 impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let raw = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
-        toml::from_str(&raw).map_err(ConfigError::Parse)
+        let mut config: Config = toml::from_str(&raw).map_err(ConfigError::Parse)?;
+        config.web.normalize();
+        Ok(config)
     }
 }
 
@@ -282,6 +284,14 @@ impl Default for WebConfig {
     }
 }
 
+impl WebConfig {
+    pub const MIN_TICK_MS: u64 = 16;
+
+    pub fn normalize(&mut self) {
+        self.tick_ms = self.tick_ms.max(Self::MIN_TICK_MS);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PipelineConfig {
@@ -300,5 +310,34 @@ impl Default for PipelineConfig {
             workers: 0,
             channel_capacity: 4096,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn web_tick_ms_normalize_keeps_valid_value() {
+        let mut web = WebConfig {
+            tick_ms: 33,
+            ..WebConfig::default()
+        };
+
+        web.normalize();
+
+        assert_eq!(web.tick_ms, 33);
+    }
+
+    #[test]
+    fn web_tick_ms_normalize_clamps_low_value() {
+        let mut web = WebConfig {
+            tick_ms: 1,
+            ..WebConfig::default()
+        };
+
+        web.normalize();
+
+        assert_eq!(web.tick_ms, WebConfig::MIN_TICK_MS);
     }
 }

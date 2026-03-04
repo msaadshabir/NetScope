@@ -674,6 +674,7 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
     if let Some(value) = args.web_port {
         web.port = value;
     }
+    web.normalize();
 
     let mut pipeline = base.pipeline.clone();
     if args.pipeline {
