@@ -25,6 +25,7 @@
 pub mod aggregator;
 pub mod pool;
 pub mod router;
+pub mod top_flows;
 pub mod worker;
 
 use crate::config::{AnalysisConfig, FlowConfig, StatsConfig, WebConfig};
@@ -98,6 +99,8 @@ pub struct PipelineConfig {
     pub stats: StatsConfig,
     /// Web dashboard settings (for sampling decisions).
     pub web: WebConfig,
+    /// Number of heavy-hitter candidates to track per worker tick.
+    pub heavy_hitter_top_n: usize,
 }
 
 /// Handle returned by [`spawn`] — the capture thread uses this to dispatch
@@ -171,13 +174,20 @@ pub fn spawn(
         let flow_cfg = config.flow.clone();
         let analysis_cfg = config.analysis.clone();
         let web_cfg = config.web.clone();
+        let heavy_hitter_top_n = config.heavy_hitter_top_n;
         let buffer_returner = buffer_returner.clone();
 
         let handle = thread::Builder::new()
             .name(format!("ns-worker-{}", shard_id))
             .spawn(move || {
-                let mut w =
-                    worker::Worker::new(shard_id, flow_cfg, analysis_cfg, web_cfg, buffer_returner);
+                let mut w = worker::Worker::new(
+                    shard_id,
+                    flow_cfg,
+                    analysis_cfg,
+                    web_cfg,
+                    heavy_hitter_top_n,
+                    buffer_returner,
+                );
                 w.run(pkt_rx, agg_tx, &running);
             })
             .expect("failed to spawn worker thread");
@@ -194,7 +204,7 @@ pub fn spawn(
     let agg_running = running.clone();
     let agg_handle = aggregator::AggregatorHandle::new(num_workers);
     let agg_handle_clone = agg_handle.clone();
-    let max_top_n = config.web.top_n.max(config.stats.top_flows as usize);
+    let max_top_n = config.stats.top_flows as usize;
     let tick_deadline_ms = config.web.tick_ms.saturating_mul(2).max(1);
     let stats_clone = stats.clone();
 

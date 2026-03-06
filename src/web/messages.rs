@@ -28,11 +28,18 @@ pub enum WsServerMsg {
 
     /// Anomaly alert forwarded in real time.
     Alert(AlertMsg),
+
+    /// Response to a client-side performance ping.
+    PerfPong { client_ts: u64, server_ts: u64 },
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatsTick {
     pub ts: f64,
+    /// Monotonic frame sequence number.
+    pub frame_seq: u64,
+    /// Server emit timestamp in unix milliseconds.
+    pub server_ts: u64,
     pub interval_ms: u64,
     pub bytes: u64,
     pub packets: u64,
@@ -109,6 +116,8 @@ pub struct AlertMsg {
 pub enum WsClientMsg {
     /// Request full detail for a specific packet.
     GetPacketDetail { id: u64 },
+    /// Ping carrying the client-side unix-ms timestamp.
+    PerfPing { client_ts: u64 },
 }
 
 // ---------------------------------------------------------------------------

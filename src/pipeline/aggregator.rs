@@ -2,7 +2,7 @@
 //! statistics, and forwards results to the CLI and web dashboard.
 
 use crossbeam_channel::Receiver;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -90,6 +90,7 @@ pub fn run(
     tick_deadline_ms: u64,
 ) {
     let num_workers = handle.inner.lock().unwrap().num_workers;
+    let frame_seq = AtomicU64::new(0);
 
     // Accumulate partial shard ticks, then merge once all shards have reported.
     let mut pending_ticks: Vec<Option<ShardTick>> = vec![None; num_workers];
@@ -115,7 +116,10 @@ pub fn run(
 
                         // Forward to web dashboard.
                         if let Some(tx) = &web_event_tx {
-                            let stats_tick = aggregated_to_stats_tick(&merged);
+                            let stats_tick = aggregated_to_stats_tick(
+                                &merged,
+                                frame_seq.fetch_add(1, Ordering::Relaxed),
+                            );
                             let _ = tx.try_send(CaptureEvent::Tick(stats_tick));
                         }
 
@@ -161,7 +165,10 @@ pub fn run(
                     let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats);
 
                     if let Some(tx) = &web_event_tx {
-                        let stats_tick = aggregated_to_stats_tick(&merged);
+                        let stats_tick = aggregated_to_stats_tick(
+                            &merged,
+                            frame_seq.fetch_add(1, Ordering::Relaxed),
+                        );
                         let _ = tx.try_send(CaptureEvent::Tick(stats_tick));
                     }
 
@@ -279,7 +286,7 @@ fn merge_ticks(
     }
 }
 
-fn aggregated_to_stats_tick(agg: &AggregatedTick) -> StatsTick {
+fn aggregated_to_stats_tick(agg: &AggregatedTick, frame_seq: u64) -> StatsTick {
     let elapsed_secs = (agg.interval_ms as f64 / 1000.0).max(0.001);
 
     let top_flows: Vec<FlowInfo> = agg
@@ -312,6 +319,8 @@ fn aggregated_to_stats_tick(agg: &AggregatedTick) -> StatsTick {
 
     StatsTick {
         ts: agg.ts,
+        frame_seq,
+        server_ts: unix_ms_now(),
         interval_ms: agg.interval_ms,
         bytes: agg.bytes,
         packets: agg.packets,
@@ -322,4 +331,11 @@ fn aggregated_to_stats_tick(agg: &AggregatedTick) -> StatsTick {
         dispatch_drops_total: agg.dispatch_drops_total,
         top_flows,
     }
+}
+
+fn unix_ms_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
 }

@@ -62,6 +62,17 @@ header .status {
   gap: 0.5rem;
 }
 
+.perf-overlay {
+  margin-left: 1rem;
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 0.75rem;
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
 .dot {
   width: 8px; height: 8px;
   border-radius: 50%;
@@ -229,6 +240,7 @@ tbody tr.selected { background: #1f3a5f; }
   <div class="status">
     <span class="dot disconnected" id="statusDot"></span>
     <span id="statusText">Connecting...</span>
+    <span class="perf-overlay" id="perfOverlay" style="display:none"></span>
   </div>
 </header>
 
@@ -334,10 +346,29 @@ tbody tr.selected { background: #1f3a5f; }
 const MAX_CHART_POINTS = 120;
 const MAX_PACKETS = 500;
 const MAX_ALERTS  = 200;
+const MAX_LATENCY_SAMPLES = 1800;
+const PERF_PING_SAMPLES = 8;
+const PERF_PING_INTERVAL_MS = 10000;
 
 let ws = null;
 let selectedPacketId = null;
 let alertCount = 0;
+
+const perfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
+let clockOffsetMs = 0;
+let pingSentAtMs = 0;
+let pingSampleCount = 0;
+let pingTimer = null;
+let latencySamples = [];
+let frameRenderTimes = [];
+let droppedFrames = 0;
+let lastFrameSeq = null;
+
+let latestStatsTick = null;
+let statsDirty = false;
+let pendingPackets = [];
+let pendingAlerts = [];
+let rafScheduled = false;
 
 const chartData = { labels: [], mbps: [], pps: [] };
 let chart = null;
@@ -357,6 +388,7 @@ function connect() {
   ws.onclose = () => {
     document.getElementById('statusDot').className = 'dot disconnected';
     document.getElementById('statusText').textContent = 'Disconnected';
+    stopPerfPings();
     setTimeout(connect, 2000);
   };
 
@@ -368,18 +400,32 @@ function connect() {
       case 'hello':
         document.getElementById('statusText').textContent =
           `Connected (v${msg.version})`;
+        if (perfEnabled) {
+          startPerfPings();
+        }
         break;
       case 'stats_tick':
         handleStatsTick(msg);
         break;
       case 'packet_sample':
-        handlePacketSample(msg);
+        pendingPackets.push(msg);
+        if (pendingPackets.length > MAX_PACKETS * 2) {
+          pendingPackets.splice(0, pendingPackets.length - MAX_PACKETS * 2);
+        }
+        scheduleRender();
         break;
       case 'packet_detail':
         handlePacketDetail(msg);
         break;
       case 'alert':
-        handleAlert(msg);
+        pendingAlerts.push(msg);
+        if (pendingAlerts.length > MAX_ALERTS * 2) {
+          pendingAlerts.splice(0, pendingAlerts.length - MAX_ALERTS * 2);
+        }
+        scheduleRender();
+        break;
+      case 'perf_pong':
+        handlePerfPong(msg);
         break;
     }
   };
@@ -389,7 +435,37 @@ function connect() {
 // Stats tick
 // ======================================================================
 function handleStatsTick(msg) {
-  // Update cards
+  latestStatsTick = msg;
+  statsDirty = true;
+  scheduleRender();
+}
+
+function scheduleRender() {
+  if (rafScheduled) {
+    return;
+  }
+  rafScheduled = true;
+  requestAnimationFrame(renderFrame);
+}
+
+function renderFrame() {
+  rafScheduled = false;
+  const renderTsMs = Date.now();
+
+  if (statsDirty && latestStatsTick) {
+    renderStatsTick(latestStatsTick, renderTsMs);
+    statsDirty = false;
+  }
+
+  flushPendingPackets();
+  flushPendingAlerts();
+
+  if (statsDirty || pendingPackets.length > 0 || pendingAlerts.length > 0) {
+    scheduleRender();
+  }
+}
+
+function renderStatsTick(msg, renderTsMs) {
   document.getElementById('cardMbps').textContent =
     msg.mbps < 1 ? msg.mbps.toFixed(3) : msg.mbps.toFixed(2);
   document.getElementById('cardPps').textContent =
@@ -397,9 +473,11 @@ function handleStatsTick(msg) {
   document.getElementById('cardFlows').textContent =
     msg.active_flows.toLocaleString();
 
-  // Update chart
-  const now = new Date();
-  const label = now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  const label = new Date(renderTsMs).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
   chartData.labels.push(label);
   chartData.mbps.push(msg.mbps);
   chartData.pps.push(msg.pps);
@@ -410,8 +488,31 @@ function handleStatsTick(msg) {
   }
   chart.update('none');
 
-  // Update flow table
   updateFlowTable(msg.top_flows);
+
+  if (typeof msg.frame_seq === 'number') {
+    if (lastFrameSeq !== null && msg.frame_seq > lastFrameSeq + 1) {
+      droppedFrames += (msg.frame_seq - lastFrameSeq - 1);
+    }
+    lastFrameSeq = msg.frame_seq;
+  }
+
+  frameRenderTimes.push(renderTsMs);
+  while (frameRenderTimes.length > 0 && renderTsMs - frameRenderTimes[0] > 60000) {
+    frameRenderTimes.shift();
+  }
+
+  if (perfEnabled && typeof msg.server_ts === 'number') {
+    const adjustedServerTs = msg.server_ts + clockOffsetMs;
+    const latencyMs = renderTsMs - adjustedServerTs;
+    if (Number.isFinite(latencyMs)) {
+      latencySamples.push(latencyMs);
+      if (latencySamples.length > MAX_LATENCY_SAMPLES) {
+        latencySamples.shift();
+      }
+    }
+    updatePerfOverlay();
+  }
 }
 
 // ======================================================================
@@ -423,35 +524,36 @@ function updateFlowTable(flows) {
 
   if (!flows || flows.length === 0) {
     empty.style.display = '';
-    tbody.innerHTML = '';
+    tbody.replaceChildren();
     return;
   }
   empty.style.display = 'none';
 
-  let html = '';
-  flows.forEach((f, i) => {
+  const rows = [];
+  for (let i = 0; i < flows.length; i++) {
+    const f = flows[i];
     const rate = f.delta_mbps < 1
       ? (f.delta_mbps * 1000).toFixed(0) + ' Kbps'
       : f.delta_mbps.toFixed(2) + ' Mbps';
     const total = formatBytes(f.bytes_total);
     const state = f.tcp_state || '';
-    html += `<tr>
-      <td>${i + 1}</td>
-      <td>${f.protocol}</td>
-      <td>${f.src_ip}:${f.src_port}</td>
-      <td>${f.dst_ip}:${f.dst_port}</td>
-      <td>${rate}</td>
-      <td>${total}</td>
-      <td>${state}</td>
-    </tr>`;
-  });
-  tbody.innerHTML = html;
+    const tr = document.createElement('tr');
+    tr.appendChild(cell(i + 1));
+    tr.appendChild(cell(f.protocol));
+    tr.appendChild(cell(`${f.src_ip}:${f.src_port}`));
+    tr.appendChild(cell(`${f.dst_ip}:${f.dst_port}`));
+    tr.appendChild(cell(rate));
+    tr.appendChild(cell(total));
+    tr.appendChild(cell(state));
+    rows.push(tr);
+  }
+  tbody.replaceChildren(...rows);
 }
 
 // ======================================================================
 // Packet list
 // ======================================================================
-function handlePacketSample(pkt) {
+function appendPacketRow(pkt) {
   const tbody = document.getElementById('packetsBody');
   const empty = document.getElementById('packetsEmpty');
   empty.style.display = 'none';
@@ -461,15 +563,13 @@ function handlePacketSample(pkt) {
   tr.onclick = () => selectPacket(pkt.id, tr);
 
   const time = formatTimestamp(pkt.ts);
-  tr.innerHTML = `
-    <td>${pkt.id}</td>
-    <td>${time}</td>
-    <td>${pkt.protocol}</td>
-    <td>${pkt.src}</td>
-    <td>${pkt.dst}</td>
-    <td>${pkt.len}</td>
-    <td>${escapeHtml(pkt.info)}</td>
-  `;
+  tr.appendChild(cell(pkt.id));
+  tr.appendChild(cell(time));
+  tr.appendChild(cell(pkt.protocol));
+  tr.appendChild(cell(pkt.src));
+  tr.appendChild(cell(pkt.dst));
+  tr.appendChild(cell(pkt.len));
+  tr.appendChild(cell(pkt.info));
 
   // Insert at top
   if (tbody.firstChild) {
@@ -480,7 +580,25 @@ function handlePacketSample(pkt) {
 
   // Trim excess
   while (tbody.children.length > MAX_PACKETS) {
-    tbody.removeChild(tbody.lastChild);
+    const removed = tbody.lastChild;
+    if (removed && Number(removed.dataset.id) === selectedPacketId) {
+      selectedPacketId = null;
+      document.getElementById('detailEmpty').textContent = 'Select a packet to inspect';
+      document.getElementById('detailEmpty').style.display = '';
+      document.getElementById('detailContent').style.display = 'none';
+    }
+    tbody.removeChild(removed);
+  }
+}
+
+function flushPendingPackets() {
+  if (pendingPackets.length === 0) {
+    return;
+  }
+  const batch = pendingPackets;
+  pendingPackets = [];
+  for (let i = 0; i < batch.length; i++) {
+    appendPacketRow(batch[i]);
   }
 }
 
@@ -533,7 +651,7 @@ function handlePacketDetail(detail) {
 // ======================================================================
 // Alerts
 // ======================================================================
-function handleAlert(alert) {
+function appendAlertRow(alert) {
   alertCount++;
   document.getElementById('cardAlerts').textContent = alertCount;
 
@@ -543,7 +661,9 @@ function handleAlert(alert) {
   const tr = document.createElement('tr');
   tr.className = 'alert-row';
   const time = formatTimestamp(alert.ts);
-  tr.innerHTML = `<td>${time}</td><td>${escapeHtml(alert.kind)}</td><td>${escapeHtml(alert.description)}</td>`;
+  tr.appendChild(cell(time));
+  tr.appendChild(cell(alert.kind));
+  tr.appendChild(cell(alert.description));
 
   if (tbody.firstChild) {
     tbody.insertBefore(tr, tbody.firstChild);
@@ -553,6 +673,17 @@ function handleAlert(alert) {
 
   while (tbody.children.length > MAX_ALERTS) {
     tbody.removeChild(tbody.lastChild);
+  }
+}
+
+function flushPendingAlerts() {
+  if (pendingAlerts.length === 0) {
+    return;
+  }
+  const batch = pendingAlerts;
+  pendingAlerts = [];
+  for (let i = 0; i < batch.length; i++) {
+    appendAlertRow(batch[i]);
   }
 }
 
@@ -567,13 +698,120 @@ function switchTab(name, btn) {
 }
 
 // ======================================================================
+// Perf overlay
+// ======================================================================
+function startPerfPings() {
+  stopPerfPings();
+  pingSampleCount = 0;
+  sendPerfPing();
+  pingTimer = setInterval(sendPerfPing, PERF_PING_INTERVAL_MS);
+}
+
+function stopPerfPings() {
+  if (pingTimer) {
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+}
+
+function sendPerfPing() {
+  if (!perfEnabled || !ws || ws.readyState !== WebSocket.OPEN) {
+    return;
+  }
+  pingSentAtMs = Date.now();
+  ws.send(JSON.stringify({ type: 'perf_ping', client_ts: pingSentAtMs }));
+}
+
+function handlePerfPong(msg) {
+  if (!perfEnabled) {
+    return;
+  }
+  if (typeof msg.client_ts !== 'number' || typeof msg.server_ts !== 'number') {
+    return;
+  }
+
+  const recvTs = Date.now();
+  const rttMs = recvTs - msg.client_ts;
+  const halfRtt = rttMs / 2;
+  const sampleOffset = msg.server_ts - (msg.client_ts + halfRtt);
+  if (!Number.isFinite(sampleOffset)) {
+    return;
+  }
+
+  if (pingSampleCount < PERF_PING_SAMPLES) {
+    clockOffsetMs = pingSampleCount === 0
+      ? sampleOffset
+      : (clockOffsetMs * 0.7 + sampleOffset * 0.3);
+    pingSampleCount += 1;
+  } else {
+    clockOffsetMs = clockOffsetMs * 0.9 + sampleOffset * 0.1;
+  }
+
+  updatePerfOverlay();
+}
+
+function updatePerfOverlay() {
+  if (!perfEnabled) {
+    return;
+  }
+  const overlay = document.getElementById('perfOverlay');
+  if (!overlay) {
+    return;
+  }
+
+  const p50 = percentile(latencySamples, 50);
+  const p95 = percentile(latencySamples, 95);
+  const p99 = percentile(latencySamples, 99);
+  const fps = frameRate();
+
+  overlay.textContent =
+    `fps ${fps.toFixed(1)} | ` +
+    `lat p50 ${formatMs(p50)} p95 ${formatMs(p95)} p99 ${formatMs(p99)} | ` +
+    `drop ${droppedFrames} | ` +
+    `offset ${formatMs(clockOffsetMs)}`;
+}
+
+// ======================================================================
 // Helpers
 // ======================================================================
+function cell(value) {
+  const td = document.createElement('td');
+  td.textContent = value == null ? '' : String(value);
+  return td;
+}
+
 function formatBytes(bytes) {
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
   return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+function formatMs(value) {
+  if (!Number.isFinite(value)) {
+    return '--';
+  }
+  return `${value.toFixed(1)}ms`;
+}
+
+function frameRate() {
+  if (frameRenderTimes.length < 2) {
+    return 0;
+  }
+  const spanMs = frameRenderTimes[frameRenderTimes.length - 1] - frameRenderTimes[0];
+  if (spanMs <= 0) {
+    return 0;
+  }
+  return ((frameRenderTimes.length - 1) * 1000) / spanMs;
+}
+
+function percentile(values, p) {
+  if (!values || values.length === 0) {
+    return Number.NaN;
+  }
+  const sorted = values.slice().sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  return sorted[Math.max(0, idx)];
 }
 
 function formatTimestamp(ts) {
@@ -667,6 +905,9 @@ function initChart() {
 // Init
 // ======================================================================
 document.addEventListener('DOMContentLoaded', () => {
+  if (perfEnabled) {
+    document.getElementById('perfOverlay').style.display = '';
+  }
   initChart();
   connect();
 });

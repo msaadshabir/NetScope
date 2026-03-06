@@ -1,5 +1,5 @@
 use crate::protocol::{NetworkHeader, ParsedPacket, TransportHeader};
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
@@ -562,6 +562,52 @@ impl FlowTracker {
         flows.sort_by(|a, b| b.bytes_total.cmp(&a.bytes_total));
         flows
     }
+
+    /// Build exact web deltas + snapshots for a specific set of candidate keys.
+    ///
+    /// This keeps the web-path cost proportional to the candidate set size
+    /// rather than the full flow table, while preserving exact displayed rates.
+    pub fn top_flows_with_snapshot_for_keys(
+        &mut self,
+        keys: &[FlowKey],
+        n: usize,
+    ) -> Vec<(FlowDelta, FlowSnapshot)> {
+        if n == 0 {
+            return Vec::new();
+        }
+
+        let mut seen = AHashSet::with_capacity(keys.len());
+        let mut out = Vec::with_capacity(keys.len());
+        for key in keys {
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            if let Some(entry) = self.flows.get_mut(key) {
+                let total = entry.total_bytes();
+                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                if delta > 0 {
+                    out.push((
+                        FlowDelta {
+                            key: key.clone(),
+                            delta_bytes: delta,
+                        },
+                        FlowSnapshot::from_entry(key, entry),
+                    ));
+                }
+            }
+        }
+
+        out.sort_unstable_by(|a, b| b.0.delta_bytes.cmp(&a.0.delta_bytes));
+        out.truncate(n.min(out.len()));
+
+        for (delta, _) in &out {
+            if let Some(entry) = self.flows.get_mut(&delta.key) {
+                entry.last_report_bytes_web = entry.total_bytes();
+            }
+        }
+
+        out
+    }
 }
 
 impl FlowSnapshot {
@@ -625,6 +671,47 @@ impl FlowKey {
             )
         }
     }
+}
+
+/// Build a canonical flow key from a parsed packet.
+///
+/// Returns `None` for packets that are not trackable flows (non-IP, fragmented
+/// IPv4 packets, or unsupported transport protocols).
+pub fn flow_key_from_packet(packet: &ParsedPacket<'_>) -> Option<FlowKey> {
+    let (src_ip, dst_ip, skip_flow) = match &packet.network {
+        Some(NetworkHeader::Ipv4(hdr)) => {
+            let skip = hdr.fragment_offset() != 0;
+            (IpAddr::V4(hdr.src_addr()), IpAddr::V4(hdr.dst_addr()), skip)
+        }
+        Some(NetworkHeader::Ipv6(hdr)) => (
+            IpAddr::V6(hdr.src_addr()),
+            IpAddr::V6(hdr.dst_addr()),
+            false,
+        ),
+        None => return None,
+    };
+
+    if skip_flow {
+        return None;
+    }
+
+    let (src_port, dst_port, protocol) = match &packet.transport {
+        Some(TransportHeader::Tcp(hdr)) => (hdr.src_port(), hdr.dst_port(), FlowProtocol::Tcp),
+        Some(TransportHeader::Udp(hdr)) => (hdr.src_port(), hdr.dst_port(), FlowProtocol::Udp),
+        _ => return None,
+    };
+
+    let src = Endpoint {
+        ip: src_ip,
+        port: src_port,
+    };
+    let dst = Endpoint {
+        ip: dst_ip,
+        port: dst_port,
+    };
+
+    let (key, _) = FlowKey::new(protocol, src, dst);
+    Some(key)
 }
 
 pub fn write_flow_json(

@@ -11,6 +11,7 @@ use crate::flow::{FlowDelta, FlowSnapshot, FlowTracker};
 use crate::protocol;
 use crate::web::messages::{AlertMsg, PacketSample, StoredPacket};
 
+use super::top_flows::SpaceSavingTopFlows;
 use super::{OwnedPacket, PacketBufReturner};
 
 /// Events a worker sends to the aggregator.
@@ -51,7 +52,9 @@ pub struct Worker {
     anomaly_detector: AnomalyDetector,
     analysis_cfg: AnalysisConfig,
     web_cfg: WebConfig,
+    heavy_hitter_top_n: usize,
     buffer_returner: PacketBufReturner,
+    top_flows_hh: SpaceSavingTopFlows,
     // Per-tick accumulators
     tick_bytes: u64,
     tick_packets: u64,
@@ -64,6 +67,7 @@ impl Worker {
         flow_cfg: FlowConfig,
         analysis_cfg: AnalysisConfig,
         web_cfg: WebConfig,
+        heavy_hitter_top_n: usize,
         buffer_returner: PacketBufReturner,
     ) -> Self {
         let flow_tracker = FlowTracker::new(
@@ -85,7 +89,9 @@ impl Worker {
             anomaly_detector,
             analysis_cfg,
             web_cfg,
+            heavy_hitter_top_n,
             buffer_returner,
+            top_flows_hh: SpaceSavingTopFlows::new(heavy_hitter_top_n),
             tick_bytes: 0,
             tick_packets: 0,
             tick_last: Instant::now(),
@@ -161,6 +167,12 @@ impl Worker {
                 // Flow tracking
                 self.flow_tracker.observe(pkt.ts, pkt.wire_len, &parsed);
 
+                if self.heavy_hitter_top_n > 0 {
+                    if let Some(key) = crate::flow::flow_key_from_packet(&parsed) {
+                        self.top_flows_hh.observe(&key, pkt.wire_len);
+                    }
+                }
+
                 // Packet sampling for web dashboard.
                 // Use the global packet id (assigned by the capture thread) so
                 // that sample_rate controls the global rate across all shards,
@@ -197,9 +209,12 @@ impl Worker {
     }
 
     fn emit_tick(&mut self, agg_tx: &Sender<WorkerEvent>) {
+        let candidates = self.top_flows_hh.take_top(self.heavy_hitter_top_n);
+        let candidate_keys: Vec<crate::flow::FlowKey> =
+            candidates.iter().map(|(key, _)| key.clone()).collect();
         let top_flows = self
             .flow_tracker
-            .top_flows_with_snapshot(self.web_cfg.top_n);
+            .top_flows_with_snapshot_for_keys(&candidate_keys, self.web_cfg.top_n);
 
         let tick = ShardTick {
             shard_id: self.shard_id,

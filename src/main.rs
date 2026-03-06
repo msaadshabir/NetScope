@@ -211,6 +211,7 @@ fn run_capture_inline(
     let mut web_tick_last = Instant::now();
     let mut web_tick_bytes: u64 = 0;
     let mut web_tick_packets: u64 = 0;
+    let mut web_frame_seq: u64 = 0;
 
     while running.load(Ordering::SeqCst) {
         // Check packet count limit
@@ -386,6 +387,11 @@ fn run_capture_inline(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_secs_f64(),
+                    frame_seq: web_frame_seq,
+                    server_ts: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
                     interval_ms: config.web.tick_ms,
                     bytes: web_tick_bytes,
                     packets: web_tick_packets,
@@ -404,6 +410,8 @@ fn run_capture_inline(
                 {
                     tracing::trace!("web event channel full, dropping stats tick");
                 }
+
+                web_frame_seq = web_frame_seq.wrapping_add(1);
 
                 web_tick_last = now;
                 web_tick_bytes = 0;
@@ -467,6 +475,7 @@ fn run_capture_pipeline(
         analysis: config.analysis.clone(),
         stats: config.stats.clone(),
         web: config.web.clone(),
+        heavy_hitter_top_n: config.web.top_n.max(config.stats.top_flows as usize),
     };
 
     let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle);

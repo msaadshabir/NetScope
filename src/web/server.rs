@@ -227,6 +227,21 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                         }
                                     }
                                 }
+                                WsClientMsg::PerfPing { client_ts } => {
+                                    let server_ts = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis() as u64;
+                                    let response = WsServerMsg::PerfPong {
+                                        client_ts,
+                                        server_ts,
+                                    };
+                                    if let Ok(json) = serde_json::to_string(&response) {
+                                        if socket.send(Message::Text(json.into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
