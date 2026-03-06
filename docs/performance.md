@@ -9,6 +9,7 @@ The hot path uses several performance-focused design choices:
 - **Zero-copy parsing** -- protocol headers are parsed as views over the original byte slice, with no allocations or copies.
 - **ahash** -- `AHashMap` and `AHashSet` replace `std::HashMap` in the flow table and anomaly detector maps, reducing per-lookup hashing cost.
 - **Partial top-N selection** -- uses `select_nth_unstable_by` to partition the top-N elements in O(F) time, then sorts only that slice. Avoids a full O(F log F) sort of the entire flow table each tick.
+- **Streaming heavy-hitters for web ticks** -- pipeline workers use a fixed-size SpaceSaving-style tracker to keep top-flow candidate selection bounded per packet, then resolve exact deltas only for those candidates before sending the dashboard payload.
 - **Minimal shard routing** -- the capture thread extracts the 5-tuple from raw packet bytes at fixed offsets (no full protocol parse) to keep the dispatch path as lean as possible.
 - **Lock-free workers** -- each pipeline worker owns its own `FlowTracker` and `AnomalyDetector`, eliminating contention on the hot path.
 - **Bounded channels** -- crossbeam bounded channels provide backpressure without allocations on the fast path.
@@ -76,8 +77,9 @@ immediate_mode = true
 
 - Increase `sample_rate` (e.g., `sample_rate = 10` sends every 10th packet).
 - Reduce `top_n` (fewer flows per tick).
-- Increase `tick_ms` (less frequent stats updates).
+- Increase `tick_ms` (less frequent stats updates). Use `33` for roughly 30fps when you want smooth live updates.
 - Reduce `payload_bytes` (smaller hex dumps per packet).
+- Use `?perf=1` in the dashboard URL to inspect fps, latency p50/p95/p99, dropped frames, and client/server clock offset while tuning.
 
 ### Reducing memory usage
 

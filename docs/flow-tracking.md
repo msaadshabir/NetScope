@@ -90,6 +90,8 @@ The `--top-flows N` option (or `stats.top_flows` in config) reports the N flows 
 
 Each stats tick resets the delta counters **only for the reported top-N flows**. Flows outside the top-N continue accumulating their delta. This means if a flow spikes briefly and drops off the top-N, its delta carries forward and may cause it to appear with a higher rate when it next enters the top-N.
 
+The web dashboard uses a separate path in pipeline mode: workers first identify a bounded set of heavy-hitter candidates with a streaming tracker, then recompute exact flow deltas only for those candidate keys before building the `stats_tick` payload. This avoids an O(F) scan on every web frame while keeping displayed dashboard rates exact.
+
 ## Configuration Summary
 
 | Key | Default | Description |

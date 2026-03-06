@@ -38,6 +38,8 @@ flowchart TD
 3. **Workers** each own their own `FlowTracker` and `AnomalyDetector`. Parsing, flow tracking, TCP analysis, and anomaly detection all happen lock-free within each shard.
 4. **Aggregator** collects per-shard tick data, merges it into global statistics, and forwards events to the CLI and web dashboard.
 
+For dashboard top flows, each worker uses a fixed-size streaming heavy-hitters tracker during the tick window to identify candidate flows without scanning the entire flow table every frame. Before emitting the shard tick, the worker resolves exact byte deltas for those candidates from its `FlowTracker`, so displayed web rates remain exact even though candidate selection is approximate.
+
 All packets for the same 5-tuple always land on the same shard, guaranteeing correctness for flow tracking and TCP state machines.
 
 ### Canonical Ordering

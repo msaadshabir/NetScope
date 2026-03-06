@@ -86,6 +86,7 @@ Note: the aggregator enforces a deadline and may emit a merged tick without ever
 - Reduce `top_n` to send fewer flows per tick.
 - Increase `tick_ms` to reduce update frequency.
 - Reduce `payload_bytes` to store less data per packet.
+- Open `/?perf=1` to inspect fps, latency percentiles, dropped frames, and client/server clock offset while tuning.
 
 ## Anomaly Alerts Not Firing
 
