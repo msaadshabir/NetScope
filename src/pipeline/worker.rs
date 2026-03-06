@@ -11,7 +11,7 @@ use crate::flow::{FlowDelta, FlowSnapshot, FlowTracker};
 use crate::protocol;
 use crate::web::messages::{AlertMsg, PacketSample, StoredPacket};
 
-use super::OwnedPacket;
+use super::{OwnedPacket, PacketBufReturner};
 
 /// Events a worker sends to the aggregator.
 #[derive(Debug)]
@@ -51,6 +51,7 @@ pub struct Worker {
     anomaly_detector: AnomalyDetector,
     analysis_cfg: AnalysisConfig,
     web_cfg: WebConfig,
+    buffer_returner: PacketBufReturner,
     // Per-tick accumulators
     tick_bytes: u64,
     tick_packets: u64,
@@ -63,6 +64,7 @@ impl Worker {
         flow_cfg: FlowConfig,
         analysis_cfg: AnalysisConfig,
         web_cfg: WebConfig,
+        buffer_returner: PacketBufReturner,
     ) -> Self {
         let flow_tracker = FlowTracker::new(
             flow_cfg.timeout_secs,
@@ -83,6 +85,7 @@ impl Worker {
             anomaly_detector,
             analysis_cfg,
             web_cfg,
+            buffer_returner,
             tick_bytes: 0,
             tick_packets: 0,
             tick_last: Instant::now(),
@@ -99,8 +102,10 @@ impl Worker {
             // Check for pipeline shutdown
             if !running.load(Ordering::Relaxed) {
                 // Drain remaining packets in the channel before shutting down.
-                while let Ok(pkt) = rx.try_recv() {
+                while let Ok(mut pkt) = rx.try_recv() {
                     self.process_packet(&pkt, &agg_tx);
+                    let owned = std::mem::take(&mut pkt.data);
+                    self.buffer_returner.release(owned);
                 }
                 break;
             }
@@ -108,8 +113,10 @@ impl Worker {
             // Use recv_timeout so we still emit ticks during traffic lulls
             // and can check the running flag periodically.
             match rx.recv_timeout(std::time::Duration::from_millis(10)) {
-                Ok(pkt) => {
+                Ok(mut pkt) => {
                     self.process_packet(&pkt, &agg_tx);
+                    let owned = std::mem::take(&mut pkt.data);
+                    self.buffer_returner.release(owned);
                 }
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,

@@ -3,6 +3,8 @@ interface = "en0"
 promiscuous = true
 snaplen = 65535
 timeout_ms = 100
+buffer_size_mb = 8
+immediate_mode = true
 filter = "tcp"
 
 [run]

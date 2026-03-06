@@ -39,6 +39,8 @@ pub struct StatsTick {
     pub mbps: f64,
     pub pps: f64,
     pub active_flows: usize,
+    pub dispatch_drops: u64,
+    pub dispatch_drops_total: u64,
     pub top_flows: Vec<FlowInfo>,
 }
 

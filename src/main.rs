@@ -4,8 +4,8 @@ use netscope::{analysis, capture, config, display, flow, pipeline, protocol, web
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 fn main() {
@@ -91,6 +91,8 @@ fn run_capture(
         promiscuous: config.capture.promiscuous,
         snaplen: config.capture.snaplen,
         timeout_ms: config.capture.timeout_ms,
+        buffer_size_mb: config.capture.buffer_size_mb,
+        immediate_mode: config.capture.immediate_mode,
         filter: config.capture.filter.clone(),
     };
 
@@ -390,6 +392,8 @@ fn run_capture_inline(
                     mbps,
                     pps,
                     active_flows,
+                    dispatch_drops: 0,
+                    dispatch_drops_total: 0,
                     top_flows,
                 };
 
@@ -447,9 +451,18 @@ fn run_capture_pipeline(
     mut savefile: Option<&mut pcap::Savefile>,
     web_handle: Option<&web::server::WebHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // Use the full snaplen as the pool buffer size so every captured packet
+    // fits without reallocation. Fall back to 65535 if snaplen is 0 (unset).
+    let packet_buf_size = match config.capture.snaplen {
+        s if s > 0 => s as usize,
+        _ => 65535,
+    };
+
     let pipeline_cfg = pipeline::PipelineConfig {
         num_workers: config.pipeline.workers,
         channel_capacity: config.pipeline.channel_capacity,
+        buffer_pool_capacity: config.pipeline.channel_capacity.saturating_mul(2).max(1),
+        packet_buf_size,
         flow: config.flow.clone(),
         analysis: config.analysis.clone(),
         stats: config.stats.clone(),
@@ -462,7 +475,6 @@ fn run_capture_pipeline(
     println!();
 
     let mut packet_count: u64 = 0;
-    let mut dispatch_drops: u64 = 0;
     let mut stats_last = Instant::now();
 
     while running.load(Ordering::SeqCst) {
@@ -494,16 +506,23 @@ fn run_capture_pipeline(
 
             // Determine shard and dispatch
             let shard = pipeline::router::shard_for_packet(raw_data, num_workers);
+            let mut buf = pipe.buffer_pool.acquire();
+            buf.extend_from_slice(raw_data);
             let owned = pipeline::OwnedPacket {
                 id: packet_count,
                 ts: timestamp,
                 wire_len,
-                data: raw_data.to_vec(),
+                data: buf,
             };
 
-            if pipe.senders[shard].try_send(owned).is_err() {
-                dispatch_drops += 1;
-                tracing::trace!(shard, "worker channel full, dropping packet");
+            match pipe.senders[shard].try_send(owned) {
+                Ok(_) => {}
+                Err(err) => {
+                    pipe.stats.record_dispatch_drop();
+                    let dropped = err.into_inner();
+                    pipe.buffer_pool.release(dropped.data);
+                    tracing::trace!(shard, "worker channel full, dropping packet");
+                }
             }
         }
 
@@ -514,8 +533,12 @@ fn run_capture_pipeline(
         {
             if let Some(tick) = pipe.aggregator.take_tick() {
                 println!(
-                    "[stats] {:.2} Mbps | {:.0} pps | {} flows",
-                    tick.mbps, tick.pps, tick.active_flows
+                    "[stats] {:.2} Mbps | {:.0} pps | {} flows | drops={} (total={})",
+                    tick.mbps,
+                    tick.pps,
+                    tick.active_flows,
+                    tick.dispatch_drops,
+                    tick.dispatch_drops_total
                 );
                 if config.stats.top_flows > 0 {
                     let elapsed = (tick.interval_ms as f64 / 1000.0).max(0.001);
@@ -542,7 +565,7 @@ fn run_capture_pipeline(
     println!("{}", "=".repeat(50));
     println!("Capture complete (pipeline mode).");
     println!("  Packets captured:  {}", packet_count);
-    println!("  Dispatch drops:    {}", dispatch_drops);
+    println!("  Dispatch drops:    {}", pipe.stats.dispatch_drops_total());
 
     // Export flows from aggregated shard snapshots (shutdown() joins all
     // worker threads, so snapshots are guaranteed to be present).

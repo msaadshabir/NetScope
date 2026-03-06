@@ -4,13 +4,14 @@
 use crossbeam_channel::Receiver;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::flow::{FlowDelta, FlowSnapshot};
 use crate::web::messages::{CaptureEvent, FlowInfo, StatsTick};
 
 use super::worker::{ShardTick, WorkerEvent};
+use super::PipelineStats;
 
 /// Aggregated tick data merged from all shards.
 #[derive(Debug, Clone)]
@@ -23,6 +24,8 @@ pub struct AggregatedTick {
     pub pps: f64,
     pub active_flows: usize,
     pub top_flows: Vec<(FlowDelta, FlowSnapshot)>,
+    pub dispatch_drops: u64,
+    pub dispatch_drops_total: u64,
 }
 
 /// Shared state the main thread can read for CLI stats / final snapshot.
@@ -83,6 +86,8 @@ pub fn run(
     web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
     running: &AtomicBool,
     max_top_n: usize,
+    stats: Arc<PipelineStats>,
+    tick_deadline_ms: u64,
 ) {
     let num_workers = handle.inner.lock().unwrap().num_workers;
 
@@ -91,7 +96,10 @@ pub fn run(
     let mut tick_start = Instant::now();
 
     loop {
-        match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        let elapsed_ms = tick_start.elapsed().as_millis() as u64;
+        let remaining_ms = tick_deadline_ms.saturating_sub(elapsed_ms).max(1);
+        let timeout_ms = remaining_ms.min(100);
+        match rx.recv_timeout(Duration::from_millis(timeout_ms)) {
             Ok(event) => match event {
                 WorkerEvent::ShardTick(shard_tick) => {
                     let idx = shard_tick.shard_id;
@@ -103,7 +111,7 @@ pub fn run(
                     let all_present = pending_ticks.iter().all(|t| t.is_some());
                     if all_present {
                         let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
-                        let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n);
+                        let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats);
 
                         // Forward to web dashboard.
                         if let Some(tx) = &web_event_tx {
@@ -147,6 +155,23 @@ pub fn run(
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                let elapsed_ms = tick_start.elapsed().as_millis() as u64;
+                if elapsed_ms >= tick_deadline_ms && pending_ticks.iter().any(|t| t.is_some()) {
+                    let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
+                    let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats);
+
+                    if let Some(tx) = &web_event_tx {
+                        let stats_tick = aggregated_to_stats_tick(&merged);
+                        let _ = tx.try_send(CaptureEvent::Tick(stats_tick));
+                    }
+
+                    {
+                        let mut state = handle.inner.lock().unwrap();
+                        state.latest_tick = Some(merged);
+                    }
+
+                    tick_start = Instant::now();
+                }
                 if !running.load(Ordering::Relaxed) {
                     drain_channel(&rx, &handle, &web_event_tx);
                     break;
@@ -210,6 +235,7 @@ fn merge_ticks(
     pending: &mut [Option<ShardTick>],
     elapsed_secs: f64,
     max_top_n: usize,
+    stats: &PipelineStats,
 ) -> AggregatedTick {
     let mut total_bytes: u64 = 0;
     let mut total_packets: u64 = 0;
@@ -248,6 +274,8 @@ fn merge_ticks(
         pps,
         active_flows: total_active_flows,
         top_flows: all_top_flows,
+        dispatch_drops: stats.take_dispatch_drops_interval(),
+        dispatch_drops_total: stats.dispatch_drops_total(),
     }
 }
 
@@ -290,6 +318,8 @@ fn aggregated_to_stats_tick(agg: &AggregatedTick) -> StatsTick {
         mbps: agg.mbps,
         pps: agg.pps,
         active_flows: agg.active_flows,
+        dispatch_drops: agg.dispatch_drops,
+        dispatch_drops_total: agg.dispatch_drops_total,
         top_flows,
     }
 }

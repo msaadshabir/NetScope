@@ -36,6 +36,8 @@ pub struct CaptureConfig {
     pub promiscuous: bool,
     pub snaplen: i32,
     pub timeout_ms: i32,
+    pub buffer_size_mb: Option<u32>,
+    pub immediate_mode: bool,
     pub filter: Option<String>,
 }
 
@@ -46,6 +48,8 @@ impl Default for CaptureConfig {
             promiscuous: true,
             snaplen: 65535,
             timeout_ms: 100,
+            buffer_size_mb: None,
+            immediate_mode: false,
             filter: None,
         }
     }
@@ -80,9 +84,34 @@ pub fn open_capture(config: &CaptureConfig) -> Result<Capture<Active>, CaptureEr
         .map_err(CaptureError::Pcap)?
         .promisc(config.promiscuous)
         .snaplen(config.snaplen)
-        .timeout(config.timeout_ms)
-        .open()
-        .map_err(CaptureError::Pcap)?;
+        .timeout(config.timeout_ms);
+
+    #[cfg(any(libpcap_1_5_0, windows))]
+    {
+        if config.immediate_mode {
+            cap = cap.immediate_mode(true);
+        }
+    }
+
+    #[cfg(not(any(libpcap_1_5_0, windows)))]
+    {
+        if config.immediate_mode {
+            tracing::debug!("immediate mode requested but not supported by libpcap");
+        }
+    }
+
+    if let Some(buffer_size_mb) = config.buffer_size_mb {
+        let snaplen = config.snaplen.max(0);
+        let buffer_size_bytes = buffer_size_mb
+            .max(1)
+            .saturating_mul(1024)
+            .saturating_mul(1024)
+            .min(i32::MAX as u32) as i32;
+        let buffer_size_bytes = buffer_size_bytes.max(snaplen);
+        cap = cap.buffer_size(buffer_size_bytes);
+    }
+
+    let mut cap = cap.open().map_err(CaptureError::Pcap)?;
 
     // Apply BPF filter if specified
     if let Some(filter) = &config.filter {
@@ -93,6 +122,9 @@ pub fn open_capture(config: &CaptureConfig) -> Result<Capture<Active>, CaptureEr
         interface = %device_name,
         promiscuous = config.promiscuous,
         snaplen = config.snaplen,
+        timeout_ms = config.timeout_ms,
+        immediate_mode = config.immediate_mode,
+        buffer_size_mb = config.buffer_size_mb,
         filter = config.filter.as_deref().unwrap_or("none"),
         "capture started"
     );

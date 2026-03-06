@@ -65,6 +65,7 @@ impl Config {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let raw = std::fs::read_to_string(path).map_err(ConfigError::Io)?;
         let mut config: Config = toml::from_str(&raw).map_err(ConfigError::Parse)?;
+        config.capture.normalize();
         config.web.normalize();
         Ok(config)
     }
@@ -77,6 +78,8 @@ pub struct CaptureConfig {
     pub promiscuous: bool,
     pub snaplen: i32,
     pub timeout_ms: i32,
+    pub buffer_size_mb: Option<u32>,
+    pub immediate_mode: bool,
     pub filter: Option<String>,
 }
 
@@ -87,7 +90,19 @@ impl Default for CaptureConfig {
             promiscuous: true,
             snaplen: 65535,
             timeout_ms: 100,
+            buffer_size_mb: None,
+            immediate_mode: false,
             filter: None,
+        }
+    }
+}
+
+impl CaptureConfig {
+    /// Normalize/validate capture config values after deserialization.
+    /// `buffer_size_mb = 0` is treated as unset (use the pcap default).
+    pub fn normalize(&mut self) {
+        if self.buffer_size_mb == Some(0) {
+            self.buffer_size_mb = None;
         }
     }
 }
