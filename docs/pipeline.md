@@ -55,7 +55,11 @@ Set in the `[pipeline]` section of the config file, or via `--pipeline` / `--wor
 
 ## Dispatch Drops
 
-When a worker's channel is full, the capture thread drops the packet rather than blocking. This prevents the capture thread from stalling (which would cause kernel-level drops). Dispatch drops are counted and printed at capture exit:
+When a worker's channel is full, the capture thread drops the packet rather than blocking. This prevents the capture thread from stalling (which would cause kernel-level drops). Dispatch drops are counted and surfaced in both periodic stats ticks and the final summary:
+
+```
+[stats] 942.13 Mbps | 100012 pps | 81234 flows | drops=0 (total=0)
+```
 
 ```
 Capture complete (pipeline mode).
@@ -71,15 +75,13 @@ If you see significant dispatch drops, consider:
 
 ## Worker Tick Merging
 
-Each worker emits a partial tick containing its byte/packet counts and top flows. The aggregator waits for all N shards to report before merging into a single global tick. This means:
+Each worker emits a partial tick containing its byte/packet counts and top flows. The aggregator merges these into a single global tick. This means:
 
 - Stats reflect all shards combined.
 - Top flows are merged across shards and re-sorted globally.
-- The tick interval is effectively paced by the slowest shard.
+- The tick interval is paced by the web tick cadence, not indefinitely gated by an idle shard.
 
-In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls.
-
-Note: the merged tick cadence is still gated by the slowest/idle shard until the aggregator timeout work (plan item A.5) is implemented.
+In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls. The aggregator also enforces a deadline (`web.tick_ms * 2`) and will merge whatever shards have reported by that deadline to avoid idle-shard gating.
 
 ## Shutdown Behavior
 

@@ -10,8 +10,8 @@ use tokio::sync::mpsc;
 use crate::flow::{FlowDelta, FlowSnapshot};
 use crate::web::messages::{CaptureEvent, FlowInfo, StatsTick};
 
-use super::worker::{ShardTick, WorkerEvent};
 use super::PipelineStats;
+use super::worker::{ShardTick, WorkerEvent};
 
 /// Aggregated tick data merged from all shards.
 #[derive(Debug, Clone)]

@@ -53,8 +53,18 @@ cargo bench -- handshake_sequence
 ### Reducing kernel drops
 
 - Use a BPF filter (`-f "..."`) to reduce the volume of traffic entering the capture pipeline.
-- Increase pcap buffer size if your platform supports it (NetScope uses libpcap defaults).
+- Increase libpcap buffer size via config: `capture.buffer_size_mb = 8` (or higher for bursty traffic).
+- Consider `capture.immediate_mode = true` (best-effort; depends on libpcap support).
 - Enable pipeline mode (`--pipeline`) to parallelize processing.
+
+Example perf-oriented capture config:
+
+```toml
+[capture]
+timeout_ms = 1
+buffer_size_mb = 8
+immediate_mode = true
+```
 
 ### Reducing dispatch drops (pipeline mode)
 

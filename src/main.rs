@@ -4,8 +4,8 @@ use netscope::{analysis, capture, config, display, flow, pipeline, protocol, web
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 fn main() {

@@ -41,6 +41,8 @@ export_json = ""    # disabled
 | `promiscuous` | bool   | `true`  | Capture in promiscuous mode.                                     |
 | `snaplen`     | int    | `65535` | Maximum bytes captured per packet.                               |
 | `timeout_ms`  | int    | `100`   | Capture read timeout in milliseconds.                            |
+| `buffer_size_mb` | int | (none)  | libpcap capture buffer size in megabytes. Omit/0 to use libpcap default. |
+| `immediate_mode` | bool | `false` | Enable libpcap immediate mode (if supported by your libpcap build). |
 | `filter`      | string | (none)  | BPF filter expression.                                           |
 
 ### `[run]`

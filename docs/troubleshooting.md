@@ -74,6 +74,8 @@ Possible causes:
 3. **Filter too restrictive** -- Remove the BPF filter temporarily.
 4. **Pipeline mode tick delay** -- The aggregator waits for all shards to report. If one shard receives no traffic, ticks are still emitted but may be delayed.
 
+Note: the aggregator enforces a deadline and may emit a merged tick without every shard present to avoid idle-shard gating. This can make `active_flows` and top flows lag slightly for a completely idle shard, but keeps frame cadence stable.
+
 ## Web Dashboard Laggy or Dropping Data
 
 **Symptom:** Charts stutter, packet list has gaps, or TRACE logs show `web event channel full`.
