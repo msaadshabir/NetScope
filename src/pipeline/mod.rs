@@ -204,7 +204,8 @@ pub fn spawn(
     let agg_running = running.clone();
     let agg_handle = aggregator::AggregatorHandle::new(num_workers);
     let agg_handle_clone = agg_handle.clone();
-    let max_top_n = config.stats.top_flows as usize;
+    let max_top_n = (config.stats.top_flows as usize).max(config.web.top_n);
+    let web_top_n = config.web.top_n;
     let tick_deadline_ms = config.web.tick_ms.saturating_mul(2).max(1);
     let stats_clone = stats.clone();
 
@@ -217,6 +218,7 @@ pub fn spawn(
                 web_event_tx,
                 &agg_running,
                 max_top_n,
+                web_top_n,
                 stats_clone,
                 tick_deadline_ms,
             );

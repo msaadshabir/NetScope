@@ -214,7 +214,7 @@ impl Worker {
             candidates.iter().map(|(key, _)| key.clone()).collect();
         let top_flows = self
             .flow_tracker
-            .top_flows_with_snapshot_for_keys(&candidate_keys, self.web_cfg.top_n);
+            .top_flows_with_snapshot_for_keys(&candidate_keys, self.heavy_hitter_top_n);
 
         let tick = ShardTick {
             shard_id: self.shard_id,

@@ -37,8 +37,11 @@ flowchart TD
 2. **Shard routing** extracts the 5-tuple (protocol, src IP, src port, dst IP, dst port) from raw bytes at fixed offsets -- no full parse required. The hash determines which worker receives the packet: `shard = hash(5-tuple) % num_workers`.
 3. **Workers** each own their own `FlowTracker` and `AnomalyDetector`. Parsing, flow tracking, TCP analysis, and anomaly detection all happen lock-free within each shard.
 4. **Aggregator** collects per-shard tick data, merges it into global statistics, and forwards events to the CLI and web dashboard.
+5. **Web server** batches each merged tick with sampled packets and alerts into a single websocket `frame`, and replays the latest frame after reconnect or lag recovery.
 
 For dashboard top flows, each worker uses a fixed-size streaming heavy-hitters tracker during the tick window to identify candidate flows without scanning the entire flow table every frame. Before emitting the shard tick, the worker resolves exact byte deltas for those candidates from its `FlowTracker`, so displayed web rates remain exact even though candidate selection is approximate.
+
+The heavy-hitter limit is sized from `max(stats.top_flows, web.top_n)`. This lets the CLI print more flows than the dashboard displays, while the aggregator still truncates the dashboard payload separately to `web.top_n`.
 
 All packets for the same 5-tuple always land on the same shard, guaranteeing correctness for flow tracking and TCP state machines.
 

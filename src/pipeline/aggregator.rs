@@ -86,6 +86,7 @@ pub fn run(
     web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
     running: &AtomicBool,
     max_top_n: usize,
+    web_top_n: usize,
     stats: Arc<PipelineStats>,
     tick_deadline_ms: u64,
 ) {
@@ -118,6 +119,7 @@ pub fn run(
                         if let Some(tx) = &web_event_tx {
                             let stats_tick = aggregated_to_stats_tick(
                                 &merged,
+                                web_top_n,
                                 frame_seq.fetch_add(1, Ordering::Relaxed),
                             );
                             let _ = tx.try_send(CaptureEvent::Tick(stats_tick));
@@ -167,6 +169,7 @@ pub fn run(
                     if let Some(tx) = &web_event_tx {
                         let stats_tick = aggregated_to_stats_tick(
                             &merged,
+                            web_top_n,
                             frame_seq.fetch_add(1, Ordering::Relaxed),
                         );
                         let _ = tx.try_send(CaptureEvent::Tick(stats_tick));
@@ -286,12 +289,13 @@ fn merge_ticks(
     }
 }
 
-fn aggregated_to_stats_tick(agg: &AggregatedTick, frame_seq: u64) -> StatsTick {
+fn aggregated_to_stats_tick(agg: &AggregatedTick, web_top_n: usize, frame_seq: u64) -> StatsTick {
     let elapsed_secs = (agg.interval_ms as f64 / 1000.0).max(0.001);
 
     let top_flows: Vec<FlowInfo> = agg
         .top_flows
         .iter()
+        .take(web_top_n)
         .map(|(delta, snap)| {
             let delta_mbps = delta.delta_bytes as f64 * 8.0 / elapsed_secs / 1_000_000.0;
             FlowInfo {

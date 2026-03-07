@@ -9,7 +9,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Flow tracking** -- bidirectional counters, TCP state machine, RTT estimation, retransmission and out-of-order detection
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
-- **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, and alerts
+- **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames
 - **Export** -- flows to JSON/CSV, alerts to JSONL, packets to pcap
 - **TOML configuration** with full CLI override support
 

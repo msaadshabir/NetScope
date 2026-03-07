@@ -17,6 +17,9 @@ pub enum WsServerMsg {
     /// Sent immediately after the WebSocket upgrade succeeds.
     Hello { version: String, tick_ms: u64 },
 
+    /// A merged per-tick frame containing stats and batched live events.
+    Frame(Frame),
+
     /// Periodic aggregate statistics (one per tick).
     StatsTick(StatsTick),
 
@@ -31,6 +34,14 @@ pub enum WsServerMsg {
 
     /// Response to a client-side performance ping.
     PerfPong { client_ts: u64, server_ts: u64 },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Frame {
+    pub frame_seq: u64,
+    pub tick: StatsTick,
+    pub packets: Vec<PacketSample>,
+    pub alerts: Vec<AlertMsg>,
 }
 
 #[derive(Debug, Clone, Serialize)]

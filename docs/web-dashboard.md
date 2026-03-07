@@ -18,6 +18,7 @@ Then open <http://127.0.0.1:8080>.
 - **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan).
 - **Perf overlay** -- open `/?perf=1` to show dashboard fps, render latency p50/p95/p99, dropped frame count, and estimated client/server clock offset.
 - **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection (2-second retry).
+- **Merged live frames** -- the server batches each tick, sampled packets, and alerts into one websocket `frame` message and replays the latest frame on reconnect / lag recovery.
 
 ## Endpoints
 
@@ -45,6 +46,7 @@ In perf mode, the browser:
 - displays fps, latency percentiles, dropped frame count, and offset in the header.
 
 For high-rate capture testing, use `tick_ms = 33` and `sample_rate = 0` to focus measurement on the stats/render path rather than the live packet feed.
+The instrumentation path is implemented; the remaining acceptance step is the 60-second validation run against real traffic.
 
 ## Architecture
 
@@ -73,10 +75,11 @@ The server sends JSON messages to clients, each with a `"type"` field:
 | Type            | Description                                                                  |
 | --------------- | ---------------------------------------------------------------------------- |
 | `hello`         | Sent on connect. Contains `version` and `tick_ms`.                           |
-| `stats_tick`    | Periodic aggregate statistics plus `frame_seq` and `server_ts` for perf mode. |
-| `packet_sample` | A sampled packet summary (id, timestamp, protocol, src, dst, info).          |
+| `frame`         | Primary live update message. Contains `frame_seq`, a `tick` payload, and batched `packets` / `alerts`. |
+| `stats_tick`    | Legacy standalone stats message format retained for compatibility with older clients. |
+| `packet_sample` | Legacy standalone sampled-packet message format retained for compatibility.   |
 | `packet_detail` | Full protocol tree and hex dump for a specific packet (requested by client). |
-| `alert`         | Anomaly alert (timestamp, kind, description).                                |
+| `alert`         | Legacy standalone alert message format retained for compatibility.            |
 | `perf_pong`     | Response to client perf probes with echoed `client_ts` and `server_ts`.      |
 
 Clients can request packet details by sending:
@@ -94,6 +97,7 @@ When perf mode is enabled in the browser, the client also sends:
 ```
 
 The server responds with `perf_pong`, which the client uses to estimate clock offset before computing end-to-end render latency.
+Clients dedupe merged frames by `frame_seq` so reconnect / lag recovery does not append duplicate packets or alerts.
 
 ## Configuration
 
@@ -116,7 +120,7 @@ At high capture rates, the event channel (capacity 4096) applies backpressure. D
 3. **Increase `tick_ms`** -- less frequent updates reduce WebSocket bandwidth.
 4. **Reduce `payload_bytes`** -- smaller hex dumps stored per packet.
 
-In pipeline mode, workers use a fixed-size streaming heavy-hitters tracker to pick top-flow candidates each tick, then recompute exact displayed deltas for the reported `top_n` flows. This keeps per-frame work bounded without showing approximate rates in the UI.
+In pipeline mode, workers use a fixed-size streaming heavy-hitters tracker to pick top-flow candidates each tick, then recompute exact displayed deltas for the reported flows. The aggregator keeps a larger merged list for CLI stats when `stats.top_flows > web.top_n`, while truncating the dashboard payload separately to `web.top_n`.
 
 ## Security
 

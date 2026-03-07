@@ -22,7 +22,9 @@ use rust_embed::Embed;
 use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast, mpsc};
 
-use super::messages::{CaptureEvent, PacketDetail, WsClientMsg, WsServerMsg};
+use super::messages::{
+    AlertMsg, CaptureEvent, Frame, PacketDetail, PacketSample, WsClientMsg, WsServerMsg,
+};
 use super::packet_store::PacketStore;
 
 // ---------------------------------------------------------------------------
@@ -41,6 +43,8 @@ struct Assets;
 pub struct AppState {
     /// Broadcast channel: every connected WS client subscribes here.
     pub broadcast_tx: broadcast::Sender<String>,
+    /// Latest merged frame for lag recovery / initial sync.
+    pub latest_frame: Mutex<Option<String>>,
     /// Packet ring buffer for on-demand detail retrieval.
     pub packet_store: Mutex<PacketStore>,
     /// Tick interval so we can tell the client in the hello message.
@@ -75,6 +79,7 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
 
     let state = Arc::new(AppState {
         broadcast_tx: broadcast_tx.clone(),
+        latest_frame: Mutex::new(None),
         packet_store: Mutex::new(PacketStore::new(config.packet_buffer)),
         tick_ms: config.tick_ms,
     });
@@ -129,29 +134,36 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
 // ---------------------------------------------------------------------------
 
 async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>) {
+    let mut pending_packets: Vec<PacketSample> = Vec::new();
+    let mut pending_alerts: Vec<AlertMsg> = Vec::new();
+
     while let Some(event) = rx.recv().await {
         match event {
             CaptureEvent::Tick(tick) => {
-                let msg = WsServerMsg::StatsTick(tick);
+                let frame = Frame {
+                    frame_seq: tick.frame_seq,
+                    tick,
+                    packets: std::mem::take(&mut pending_packets),
+                    alerts: std::mem::take(&mut pending_alerts),
+                };
+                let msg = WsServerMsg::Frame(frame);
                 if let Ok(json) = serde_json::to_string(&msg) {
+                    {
+                        let mut latest = state.latest_frame.lock().await;
+                        *latest = Some(json.clone());
+                    }
                     let _ = state.broadcast_tx.send(json);
                 }
             }
             CaptureEvent::Packet(sample) => {
-                let msg = WsServerMsg::PacketSample(sample);
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = state.broadcast_tx.send(json);
-                }
+                pending_packets.push(sample);
             }
             CaptureEvent::PacketStored(stored) => {
                 let mut store = state.packet_store.lock().await;
                 store.push(stored);
             }
             CaptureEvent::Alert(alert) => {
-                let msg = WsServerMsg::Alert(alert);
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    let _ = state.broadcast_tx.send(json);
-                }
+                pending_alerts.push(alert);
             }
         }
     }
@@ -183,6 +195,17 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
 
     // Subscribe to broadcast
     let mut broadcast_rx = state.broadcast_tx.subscribe();
+    let mut last_sent_frame_seq: Option<u64> = None;
+
+    // Send the latest frame so newly connected clients start from current state.
+    if let Some(frame) = { state.latest_frame.lock().await.clone() } {
+        if let Ok(frame_msg) = serde_json::from_str::<FrameEnvelope>(&frame) {
+            last_sent_frame_seq = Some(frame_msg.frame.frame_seq);
+        }
+        if socket.send(Message::Text(frame.into())).await.is_err() {
+            return;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -190,12 +213,33 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
             result = broadcast_rx.recv() => {
                 match result {
                     Ok(msg) => {
+                        if should_skip_frame(&msg, last_sent_frame_seq) {
+                            continue;
+                        }
+                        if let Some(seq) = extract_frame_seq(&msg) {
+                            last_sent_frame_seq = Some(seq);
+                        }
                         if socket.send(Message::Text(msg.into())).await.is_err() {
                             break;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::debug!("ws client lagged, skipped {} messages", n);
+                        // Drop buffered backlog and resume from newest broadcast position.
+                        broadcast_rx = state.broadcast_tx.subscribe();
+                        // Resync by sending the newest merged frame instead of replaying history.
+                        if let Some(frame) = { state.latest_frame.lock().await.clone() } {
+                            if let Ok(frame_msg) = serde_json::from_str::<FrameEnvelope>(&frame) {
+                                let seq = frame_msg.frame.frame_seq;
+                                if last_sent_frame_seq == Some(seq) {
+                                    continue;
+                                }
+                                last_sent_frame_seq = Some(seq);
+                            }
+                            if socket.send(Message::Text(frame.into())).await.is_err() {
+                                break;
+                            }
+                        }
                     }
                     Err(_) => break,
                 }
@@ -250,6 +294,29 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                 }
             }
         }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct FrameEnvelope {
+    frame: FrameHeader,
+}
+
+#[derive(serde::Deserialize)]
+struct FrameHeader {
+    frame_seq: u64,
+}
+
+fn extract_frame_seq(msg: &str) -> Option<u64> {
+    serde_json::from_str::<FrameEnvelope>(msg)
+        .ok()
+        .map(|frame| frame.frame.frame_seq)
+}
+
+fn should_skip_frame(msg: &str, last_sent_frame_seq: Option<u64>) -> bool {
+    match (extract_frame_seq(msg), last_sent_frame_seq) {
+        (Some(seq), Some(last_seq)) => seq <= last_seq,
+        _ => false,
     }
 }
 

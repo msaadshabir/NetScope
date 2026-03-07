@@ -407,6 +407,9 @@ function connect() {
       case 'stats_tick':
         handleStatsTick(msg);
         break;
+      case 'frame':
+        handleFrame(msg);
+        break;
       case 'packet_sample':
         pendingPackets.push(msg);
         if (pendingPackets.length > MAX_PACKETS * 2) {
@@ -437,6 +440,28 @@ function connect() {
 function handleStatsTick(msg) {
   latestStatsTick = msg;
   statsDirty = true;
+  scheduleRender();
+}
+
+function handleFrame(msg) {
+  if (msg.tick) {
+    handleStatsTick(msg.tick);
+  }
+
+  if (Array.isArray(msg.packets) && msg.packets.length > 0) {
+    pendingPackets.push(...msg.packets);
+    if (pendingPackets.length > MAX_PACKETS * 2) {
+      pendingPackets.splice(0, pendingPackets.length - MAX_PACKETS * 2);
+    }
+  }
+
+  if (Array.isArray(msg.alerts) && msg.alerts.length > 0) {
+    pendingAlerts.push(...msg.alerts);
+    if (pendingAlerts.length > MAX_ALERTS * 2) {
+      pendingAlerts.splice(0, pendingAlerts.length - MAX_ALERTS * 2);
+    }
+  }
+
   scheduleRender();
 }
 
