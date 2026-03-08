@@ -7,6 +7,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Live packet capture** via libpcap with BPF filter support
 - **Zero-copy protocol parsing** -- Ethernet, 802.1Q VLAN, IPv4, IPv6, TCP, UDP, ICMP
 - **Flow tracking** -- bidirectional counters, TCP state machine, RTT estimation, retransmission and out-of-order detection
+- **Scale-mode flow storage** -- compact internal flow tables activate automatically when deep TCP analysis is disabled
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
 - **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames

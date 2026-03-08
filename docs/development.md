@@ -64,6 +64,7 @@ cargo test
 Tests are co-located with the source code in `#[cfg(test)]` modules. Key test areas:
 
 - `src/flow.rs` -- flow key ordering, TCP state transitions, sequence tracking, RTT sampling.
+- `src/flow.rs` -- also contains the scale-mode flow store (`FlowKeyV4`, `FlowKeyV6`, `ScaleFlowEntry`) and layout regression tests.
 - `src/pipeline/router.rs` -- shard routing correctness (same flow both directions = same shard).
 - `src/protocol/*.rs` -- header parsing, field extraction, edge cases (truncated packets, wrong versions).
 

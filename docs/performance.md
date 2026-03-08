@@ -15,6 +15,7 @@ The hot path uses several performance-focused design choices:
 - **Lock-free workers** -- each pipeline worker owns its own `FlowTracker` and `AnomalyDetector`, eliminating contention on the hot path.
 - **Bounded channels** -- crossbeam bounded channels provide backpressure without allocations on the fast path.
 - **Flow table pre-sizing** -- `FlowTracker` reserves hash map capacity based on `flow.max_flows` to avoid rehashing/resizes during steady-state capture.
+- **Scale-mode storage** -- when RTT, retransmission, and out-of-order analysis are all disabled, `FlowTracker` switches to compact split IPv4/IPv6 flow tables backed by `ScaleFlowEntry`, avoiding TCP sequence-tracker allocation in that mode.
 
 ## Benchmark Results
 
@@ -89,6 +90,7 @@ immediate_mode = true
 - Reduce `flow.timeout_secs` to expire flows sooner.
 - Lower `packet_buffer` to keep fewer packets in the web dashboard ring buffer.
 - Note: in pipeline mode, `max_flows` is per-shard, so the effective limit is `max_flows * num_workers`.
+- For large flow-count runs, disable deep TCP analysis (`analysis.rtt = false`, `analysis.retrans = false`, `analysis.out_of_order = false`) to activate scale-mode flow storage.
 
 ### CPU usage
 

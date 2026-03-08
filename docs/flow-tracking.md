@@ -14,6 +14,8 @@ Where each endpoint is `(ip, port)` and endpoints are ordered deterministically 
 
 Only TCP and UDP flows are tracked. ICMP and other protocols are parsed but do not create flow entries.
 
+For memory-sensitive runs, NetScope also has an internal scale-mode storage path. When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, flows are stored in compact split IPv4/IPv6 tables and omit deep TCP sequence-tracking state.
+
 ## Per-Flow Data
 
 Each flow tracks:
@@ -31,6 +33,8 @@ Each flow tracks:
 | `rtt_min_ms` | Minimum observed RTT. |
 | `rtt_ewma_ms` | Exponentially weighted moving average RTT (alpha = 0.125). |
 | `rtt_samples` | Number of RTT samples collected. |
+
+In scale mode, NetScope still tracks bidirectional byte/packet counters, TCP state, and client direction, but RTT / retransmission / out-of-order fields remain unset in exported snapshots.
 
 ## TCP State Machine
 
@@ -82,6 +86,8 @@ Flows are expired based on inactivity:
 
 Implementation note: NetScope pre-sizes the internal flow table based on `flow.max_flows` (with some headroom) to avoid hash map resizes during capture. This can increase initial memory reservation at startup, especially in pipeline mode where the limit applies per shard.
 
+When deep TCP analysis is disabled, flow storage also switches to split compact IPv4/IPv6 key types internally, which reduces per-flow memory overhead in scale-mode captures.
+
 Expiration is checked once per second during packet processing.
 
 ## Top Flows
@@ -91,6 +97,8 @@ The `--top-flows N` option (or `stats.top_flows` in config) reports the N flows 
 Each stats tick resets the delta counters **only for the reported top-N flows**. Flows outside the top-N continue accumulating their delta. This means if a flow spikes briefly and drops off the top-N, its delta carries forward and may cause it to appear with a higher rate when it next enters the top-N.
 
 The web dashboard uses a separate path in pipeline mode: workers first identify a bounded set of heavy-hitter candidates with a streaming tracker, then recompute exact flow deltas only for those candidate keys before building the live dashboard frame. This avoids an O(F) scan on every web frame while keeping displayed dashboard rates exact.
+
+In scale mode, that heavy-hitter candidate path also uses the compact internal flow-key representation before snapshots are converted back to the public flow view for CLI/web output.
 
 In pipeline mode, the heavy-hitter limit is sized from `max(stats.top_flows, web.top_n)`. That lets the CLI request more top flows than the web dashboard displays without widening the dashboard payload.
 

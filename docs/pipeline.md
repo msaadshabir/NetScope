@@ -39,7 +39,7 @@ flowchart TD
 4. **Aggregator** collects per-shard tick data, merges it into global statistics, and forwards events to the CLI and web dashboard.
 5. **Web server** batches each merged tick with sampled packets and alerts into a single websocket `frame`, and replays the latest frame after reconnect or lag recovery.
 
-For dashboard top flows, each worker uses a fixed-size streaming heavy-hitters tracker during the tick window to identify candidate flows without scanning the entire flow table every frame. Before emitting the shard tick, the worker resolves exact byte deltas for those candidates from its `FlowTracker`, so displayed web rates remain exact even though candidate selection is approximate.
+For dashboard top flows, each worker uses a fixed-size streaming heavy-hitters tracker during the tick window to identify candidate flows without scanning the entire flow table every frame. Before emitting the shard tick, the worker resolves exact byte deltas for those candidates from its `FlowTracker`, so displayed web rates remain exact even though candidate selection is approximate. When deep TCP analysis is disabled, this candidate path now uses the same compact internal flow-key representation as scale-mode flow storage.
 
 The heavy-hitter limit is sized from `max(stats.top_flows, web.top_n)`. This lets the CLI print more flows than the dashboard displays, while the aggregator still truncates the dashboard payload separately to `web.top_n`.
 
@@ -114,7 +114,7 @@ In practice, this means pipeline mode is less sensitive to anomalies than inline
 
 The configured `max_flows` limit applies to each worker independently. With 4 workers and `max_flows = 100000`, the effective global limit is 400,000 flows. This means pipeline mode can use more memory for flow tracking than the configured value suggests.
 
-NetScope also pre-sizes each shard's flow table based on `max_flows`, so a higher value can increase memory reserved at startup even before the flow table fills.
+NetScope also pre-sizes each shard's flow table based on `max_flows`, so a higher value can increase memory reserved at startup even before the flow table fills. If `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, each shard uses the lighter scale-mode flow store to reduce per-flow memory overhead.
 
 ### No per-packet CLI output
 

@@ -14,6 +14,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Flow tracking now pre-sizes the flow table based on `flow.max_flows` to reduce hash map resizes during capture.
 - TCP RTT analysis avoids per-call heap allocation by streaming RTT samples from ACK handling without buffering.
+- Flow tracking now switches to a compact scale-mode store with split IPv4/IPv6 tables when RTT, retransmission, and out-of-order analysis are all disabled.
+- Pipeline heavy-hitter candidate tracking now uses the compact internal flow-key path in scale mode.
 - Pipeline-mode web updates now use merged websocket `frame` messages with latest-frame replay on reconnect / lag recovery.
 - Pipeline-mode top-flow reporting now decouples CLI `stats.top_flows` from dashboard `web.top_n`.
 - Updated documentation for performance benchmarks and flow table sizing behavior.
