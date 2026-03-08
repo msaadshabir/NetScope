@@ -37,6 +37,25 @@ impl fmt::Display for FlowProtocol {
     }
 }
 
+impl FlowProtocol {
+    #[inline]
+    fn as_u8(self) -> u8 {
+        match self {
+            FlowProtocol::Tcp => 6,
+            FlowProtocol::Udp => 17,
+        }
+    }
+
+    #[inline]
+    fn from_u8(value: u8) -> Option<Self> {
+        match value {
+            6 => Some(FlowProtocol::Tcp),
+            17 => Some(FlowProtocol::Udp),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowDirection {
@@ -66,6 +85,170 @@ impl fmt::Display for FlowKey {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub(crate) struct FlowKeyV4 {
+    a_ip: u32,
+    b_ip: u32,
+    a_port: u16,
+    b_port: u16,
+    proto: u8,
+    _pad: [u8; 3],
+}
+
+impl FlowKeyV4 {
+    #[inline]
+    fn new(
+        protocol: FlowProtocol,
+        src_ip: std::net::Ipv4Addr,
+        src_port: u16,
+        dst_ip: std::net::Ipv4Addr,
+        dst_port: u16,
+    ) -> (Self, FlowDirection) {
+        let src = (u32::from_be_bytes(src_ip.octets()), src_port);
+        let dst = (u32::from_be_bytes(dst_ip.octets()), dst_port);
+        if src <= dst {
+            (
+                FlowKeyV4 {
+                    a_ip: src.0,
+                    b_ip: dst.0,
+                    a_port: src.1,
+                    b_port: dst.1,
+                    proto: protocol.as_u8(),
+                    _pad: [0; 3],
+                },
+                FlowDirection::AtoB,
+            )
+        } else {
+            (
+                FlowKeyV4 {
+                    a_ip: dst.0,
+                    b_ip: src.0,
+                    a_port: dst.1,
+                    b_port: src.1,
+                    proto: protocol.as_u8(),
+                    _pad: [0; 3],
+                },
+                FlowDirection::BtoA,
+            )
+        }
+    }
+
+    #[inline]
+    fn from_flow_key(key: &FlowKey) -> Option<Self> {
+        let (a, b) = match (key.a.ip, key.b.ip) {
+            (IpAddr::V4(a), IpAddr::V4(b)) => (a, b),
+            _ => return None,
+        };
+        Some(FlowKeyV4 {
+            a_ip: u32::from_be_bytes(a.octets()),
+            b_ip: u32::from_be_bytes(b.octets()),
+            a_port: key.a.port,
+            b_port: key.b.port,
+            proto: key.protocol.as_u8(),
+            _pad: [0; 3],
+        })
+    }
+
+    #[inline]
+    fn to_flow_key(self) -> FlowKey {
+        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
+        FlowKey {
+            protocol,
+            a: Endpoint {
+                ip: IpAddr::V4(std::net::Ipv4Addr::from(self.a_ip.to_be_bytes())),
+                port: self.a_port,
+            },
+            b: Endpoint {
+                ip: IpAddr::V4(std::net::Ipv4Addr::from(self.b_ip.to_be_bytes())),
+                port: self.b_port,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub(crate) struct FlowKeyV6 {
+    a_ip: [u8; 16],
+    b_ip: [u8; 16],
+    a_port: u16,
+    b_port: u16,
+    proto: u8,
+    _pad: [u8; 3],
+}
+
+impl FlowKeyV6 {
+    #[inline]
+    fn new(
+        protocol: FlowProtocol,
+        src_ip: std::net::Ipv6Addr,
+        src_port: u16,
+        dst_ip: std::net::Ipv6Addr,
+        dst_port: u16,
+    ) -> (Self, FlowDirection) {
+        let src = (src_ip.octets(), src_port);
+        let dst = (dst_ip.octets(), dst_port);
+        if src <= dst {
+            (
+                FlowKeyV6 {
+                    a_ip: src.0,
+                    b_ip: dst.0,
+                    a_port: src.1,
+                    b_port: dst.1,
+                    proto: protocol.as_u8(),
+                    _pad: [0; 3],
+                },
+                FlowDirection::AtoB,
+            )
+        } else {
+            (
+                FlowKeyV6 {
+                    a_ip: dst.0,
+                    b_ip: src.0,
+                    a_port: dst.1,
+                    b_port: src.1,
+                    proto: protocol.as_u8(),
+                    _pad: [0; 3],
+                },
+                FlowDirection::BtoA,
+            )
+        }
+    }
+
+    #[inline]
+    fn from_flow_key(key: &FlowKey) -> Option<Self> {
+        let (a, b) = match (key.a.ip, key.b.ip) {
+            (IpAddr::V6(a), IpAddr::V6(b)) => (a, b),
+            _ => return None,
+        };
+        Some(FlowKeyV6 {
+            a_ip: a.octets(),
+            b_ip: b.octets(),
+            a_port: key.a.port,
+            b_port: key.b.port,
+            proto: key.protocol.as_u8(),
+            _pad: [0; 3],
+        })
+    }
+
+    #[inline]
+    fn to_flow_key(self) -> FlowKey {
+        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
+        FlowKey {
+            protocol,
+            a: Endpoint {
+                ip: IpAddr::V6(std::net::Ipv6Addr::from(self.a_ip)),
+                port: self.a_port,
+            },
+            b: Endpoint {
+                ip: IpAddr::V6(std::net::Ipv6Addr::from(self.b_ip)),
+                port: self.b_port,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TcpState {
@@ -76,6 +259,68 @@ pub enum TcpState {
     Closed,
     Reset,
     Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct ScaleFlowEntry {
+    first_seen: f64,
+    last_seen: f64,
+    packets_a_to_b: u64,
+    packets_b_to_a: u64,
+    bytes_a_to_b: u64,
+    bytes_b_to_a: u64,
+    tcp_state: Option<TcpState>,
+    client: Option<FlowDirection>,
+    last_report_bytes_stats: u64,
+    last_report_bytes_web: u64,
+}
+
+impl ScaleFlowEntry {
+    fn new(ts: f64, protocol: FlowProtocol) -> Self {
+        ScaleFlowEntry {
+            first_seen: ts,
+            last_seen: ts,
+            packets_a_to_b: 0,
+            packets_b_to_a: 0,
+            bytes_a_to_b: 0,
+            bytes_b_to_a: 0,
+            tcp_state: match protocol {
+                FlowProtocol::Tcp => Some(TcpState::Unknown),
+                FlowProtocol::Udp => None,
+            },
+            client: None,
+            last_report_bytes_stats: 0,
+            last_report_bytes_web: 0,
+        }
+    }
+
+    #[inline]
+    fn observe(&mut self, ts: f64, direction: FlowDirection, bytes: u64, flags: Option<TcpFlags>) {
+        self.last_seen = ts;
+        match direction {
+            FlowDirection::AtoB => {
+                self.packets_a_to_b += 1;
+                self.bytes_a_to_b += bytes;
+            }
+            FlowDirection::BtoA => {
+                self.packets_b_to_a += 1;
+                self.bytes_b_to_a += bytes;
+            }
+        }
+        if let Some(flags) = flags {
+            update_tcp_state_fields(&mut self.tcp_state, &mut self.client, flags, direction);
+        }
+    }
+
+    #[inline]
+    fn total_bytes(&self) -> u64 {
+        self.bytes_a_to_b + self.bytes_b_to_a
+    }
+
+    #[inline]
+    fn total_packets(&self) -> u64 {
+        self.packets_a_to_b + self.packets_b_to_a
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -243,45 +488,54 @@ impl FlowEntry {
     }
 
     fn update_tcp_state(&mut self, flags: TcpFlags, direction: FlowDirection) {
-        if flags.rst {
-            self.tcp_state = Some(TcpState::Reset);
-            return;
+        update_tcp_state_fields(&mut self.tcp_state, &mut self.client, flags, direction);
+    }
+}
+
+fn update_tcp_state_fields(
+    tcp_state: &mut Option<TcpState>,
+    client: &mut Option<FlowDirection>,
+    flags: TcpFlags,
+    direction: FlowDirection,
+) {
+    if flags.rst {
+        *tcp_state = Some(TcpState::Reset);
+        return;
+    }
+    if flags.syn && !flags.ack {
+        if client.is_none() {
+            *client = Some(direction);
         }
-        if flags.syn && !flags.ack {
-            if self.client.is_none() {
-                self.client = Some(direction);
+        *tcp_state = Some(TcpState::SynSent);
+        return;
+    }
+    if flags.syn && flags.ack {
+        *tcp_state = Some(TcpState::SynAck);
+        return;
+    }
+    if flags.fin {
+        match tcp_state {
+            Some(TcpState::FinWait) => {
+                // Second FIN seen (other direction) — move to Closed
+                *tcp_state = Some(TcpState::Closed);
             }
-            self.tcp_state = Some(TcpState::SynSent);
-            return;
-        }
-        if flags.syn && flags.ack {
-            self.tcp_state = Some(TcpState::SynAck);
-            return;
-        }
-        if flags.fin {
-            match self.tcp_state {
-                Some(TcpState::FinWait) => {
-                    // Second FIN seen (other direction) — move to Closed
-                    self.tcp_state = Some(TcpState::Closed);
-                }
-                _ => {
-                    self.tcp_state = Some(TcpState::FinWait);
-                }
+            _ => {
+                *tcp_state = Some(TcpState::FinWait);
             }
-            return;
         }
-        if flags.ack {
-            if !matches!(
-                self.tcp_state,
-                Some(TcpState::Reset | TcpState::Closed | TcpState::FinWait)
-            ) {
-                self.tcp_state = Some(TcpState::Established);
-            }
-            return;
+        return;
+    }
+    if flags.ack {
+        if !matches!(
+            tcp_state,
+            Some(TcpState::Reset | TcpState::Closed | TcpState::FinWait)
+        ) {
+            *tcp_state = Some(TcpState::Established);
         }
-        if self.tcp_state.is_none() {
-            self.tcp_state = Some(TcpState::Unknown);
-        }
+        return;
+    }
+    if tcp_state.is_none() {
+        *tcp_state = Some(TcpState::Unknown);
     }
 }
 
@@ -316,9 +570,51 @@ pub struct FlowDelta {
     pub delta_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum CompactFlowKey {
+    V4(FlowKeyV4),
+    V6(FlowKeyV6),
+}
+
+impl CompactFlowKey {
+    #[inline]
+    pub(crate) fn from_flow_key(key: &FlowKey) -> Option<Self> {
+        if let Some(v4) = FlowKeyV4::from_flow_key(key) {
+            return Some(CompactFlowKey::V4(v4));
+        }
+        if let Some(v6) = FlowKeyV6::from_flow_key(key) {
+            return Some(CompactFlowKey::V6(v6));
+        }
+        None
+    }
+
+    #[inline]
+    pub(crate) fn to_flow_key(self) -> FlowKey {
+        match self {
+            CompactFlowKey::V4(key) => key.to_flow_key(),
+            CompactFlowKey::V6(key) => key.to_flow_key(),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum FlowStore {
+    Full(AHashMap<FlowKey, FlowEntry>),
+    Scale {
+        flows_v4: AHashMap<FlowKeyV4, ScaleFlowEntry>,
+        flows_v6: AHashMap<FlowKeyV6, ScaleFlowEntry>,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ParsedFlowIps {
+    V4(std::net::Ipv4Addr, std::net::Ipv4Addr),
+    V6(std::net::Ipv6Addr, std::net::Ipv6Addr),
+}
+
 #[derive(Debug)]
 pub struct FlowTracker {
-    flows: AHashMap<FlowKey, FlowEntry>,
+    store: FlowStore,
     timeout_secs: f64,
     max_flows: usize,
     last_prune: f64,
@@ -342,8 +638,18 @@ impl FlowTracker {
         } else {
             0
         };
+        let scale_mode = !track_rtt && !track_retrans && !track_out_of_order;
+        let store = if scale_mode {
+            FlowStore::Scale {
+                flows_v4: AHashMap::with_capacity(initial_capacity),
+                flows_v6: AHashMap::with_capacity(initial_capacity / 8),
+            }
+        } else {
+            FlowStore::Full(AHashMap::with_capacity(initial_capacity))
+        };
+
         FlowTracker {
-            flows: AHashMap::with_capacity(initial_capacity),
+            store,
             timeout_secs,
             max_flows,
             last_prune: 0.0,
@@ -354,21 +660,22 @@ impl FlowTracker {
     }
 
     pub fn len(&self) -> usize {
-        self.flows.len()
+        match &self.store {
+            FlowStore::Full(flows) => flows.len(),
+            FlowStore::Scale { flows_v4, flows_v6 } => flows_v4.len() + flows_v6.len(),
+        }
     }
 
     #[inline]
     pub fn observe(&mut self, ts: f64, wire_len: u64, packet: &ParsedPacket<'_>) {
-        let (src_ip, dst_ip, skip_flow) = match &packet.network {
+        let (ips, skip_flow) = match &packet.network {
             Some(NetworkHeader::Ipv4(hdr)) => {
                 let skip = hdr.fragment_offset() != 0;
-                (IpAddr::V4(hdr.src_addr()), IpAddr::V4(hdr.dst_addr()), skip)
+                (ParsedFlowIps::V4(hdr.src_addr(), hdr.dst_addr()), skip)
             }
-            Some(NetworkHeader::Ipv6(hdr)) => (
-                IpAddr::V6(hdr.src_addr()),
-                IpAddr::V6(hdr.dst_addr()),
-                false,
-            ),
+            Some(NetworkHeader::Ipv6(hdr)) => {
+                (ParsedFlowIps::V6(hdr.src_addr(), hdr.dst_addr()), false)
+            }
             None => return,
         };
 
@@ -402,36 +709,62 @@ impl FlowTracker {
             _ => return,
         };
 
-        let src = Endpoint {
-            ip: src_ip,
-            port: src_port,
-        };
-        let dst = Endpoint {
-            ip: dst_ip,
-            port: dst_port,
-        };
+        match &mut self.store {
+            FlowStore::Full(flows) => {
+                let (src_ip, dst_ip) = match ips {
+                    ParsedFlowIps::V4(src, dst) => (IpAddr::V4(src), IpAddr::V4(dst)),
+                    ParsedFlowIps::V6(src, dst) => (IpAddr::V6(src), IpAddr::V6(dst)),
+                };
 
-        let (key, direction) = FlowKey::new(protocol, src, dst);
-        let entry = self
-            .flows
-            .entry(key)
-            .or_insert_with(|| FlowEntry::new(ts, protocol));
-        entry.observe(ts, direction, wire_len, flags);
-        if protocol == FlowProtocol::Tcp {
-            if let (Some(seq), Some(seq_len)) = (seq, seq_len) {
-                if self.track_rtt || self.track_retrans || self.track_out_of_order {
-                    entry.observe_tcp(
-                        ts,
-                        direction,
-                        seq,
-                        ack,
-                        seq_len,
-                        self.track_rtt,
-                        self.track_retrans,
-                        self.track_out_of_order,
-                    );
+                let src = Endpoint {
+                    ip: src_ip,
+                    port: src_port,
+                };
+                let dst = Endpoint {
+                    ip: dst_ip,
+                    port: dst_port,
+                };
+
+                let (key, direction) = FlowKey::new(protocol, src, dst);
+                let entry = flows
+                    .entry(key)
+                    .or_insert_with(|| FlowEntry::new(ts, protocol));
+                entry.observe(ts, direction, wire_len, flags);
+                if protocol == FlowProtocol::Tcp {
+                    if let (Some(seq), Some(seq_len)) = (seq, seq_len) {
+                        if self.track_rtt || self.track_retrans || self.track_out_of_order {
+                            entry.observe_tcp(
+                                ts,
+                                direction,
+                                seq,
+                                ack,
+                                seq_len,
+                                self.track_rtt,
+                                self.track_retrans,
+                                self.track_out_of_order,
+                            );
+                        }
+                    }
                 }
             }
+            FlowStore::Scale { flows_v4, flows_v6 } => match ips {
+                ParsedFlowIps::V4(src_ip, dst_ip) => {
+                    let (key, direction) =
+                        FlowKeyV4::new(protocol, src_ip, src_port, dst_ip, dst_port);
+                    let entry = flows_v4
+                        .entry(key)
+                        .or_insert_with(|| ScaleFlowEntry::new(ts, protocol));
+                    entry.observe(ts, direction, wire_len, flags);
+                }
+                ParsedFlowIps::V6(src_ip, dst_ip) => {
+                    let (key, direction) =
+                        FlowKeyV6::new(protocol, src_ip, src_port, dst_ip, dst_port);
+                    let entry = flows_v6
+                        .entry(key)
+                        .or_insert_with(|| ScaleFlowEntry::new(ts, protocol));
+                    entry.observe(ts, direction, wire_len, flags);
+                }
+            },
         }
     }
 
@@ -442,27 +775,74 @@ impl FlowTracker {
         self.last_prune = now;
 
         let mut removed = 0;
-        if self.timeout_secs > 0.0 {
-            self.flows.retain(|_, entry| {
-                let keep = now - entry.last_seen <= self.timeout_secs;
-                if !keep {
-                    removed += 1;
+        match &mut self.store {
+            FlowStore::Full(flows) => {
+                if self.timeout_secs > 0.0 {
+                    flows.retain(|_, entry| {
+                        let keep = now - entry.last_seen <= self.timeout_secs;
+                        if !keep {
+                            removed += 1;
+                        }
+                        keep
+                    });
                 }
-                keep
-            });
-        }
 
-        if self.max_flows > 0 && self.flows.len() > self.max_flows {
-            let mut entries: Vec<(FlowKey, f64)> = self
-                .flows
-                .iter()
-                .map(|(key, entry)| (key.clone(), entry.last_seen))
-                .collect();
-            entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
-            let excess = self.flows.len() - self.max_flows;
-            for (key, _) in entries.into_iter().take(excess) {
-                if self.flows.remove(&key).is_some() {
-                    removed += 1;
+                if self.max_flows > 0 && flows.len() > self.max_flows {
+                    let mut entries: Vec<(FlowKey, f64)> = flows
+                        .iter()
+                        .map(|(key, entry)| (key.clone(), entry.last_seen))
+                        .collect();
+                    entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+                    let excess = flows.len() - self.max_flows;
+                    for (key, _) in entries.into_iter().take(excess) {
+                        if flows.remove(&key).is_some() {
+                            removed += 1;
+                        }
+                    }
+                }
+            }
+            FlowStore::Scale { flows_v4, flows_v6 } => {
+                if self.timeout_secs > 0.0 {
+                    flows_v4.retain(|_, entry| {
+                        let keep = now - entry.last_seen <= self.timeout_secs;
+                        if !keep {
+                            removed += 1;
+                        }
+                        keep
+                    });
+                    flows_v6.retain(|_, entry| {
+                        let keep = now - entry.last_seen <= self.timeout_secs;
+                        if !keep {
+                            removed += 1;
+                        }
+                        keep
+                    });
+                }
+
+                let total_len = flows_v4.len() + flows_v6.len();
+                if self.max_flows > 0 && total_len > self.max_flows {
+                    let mut entries: Vec<(CompactFlowKey, f64)> = Vec::with_capacity(total_len);
+                    entries.extend(
+                        flows_v4
+                            .iter()
+                            .map(|(key, entry)| (CompactFlowKey::V4(*key), entry.last_seen)),
+                    );
+                    entries.extend(
+                        flows_v6
+                            .iter()
+                            .map(|(key, entry)| (CompactFlowKey::V6(*key), entry.last_seen)),
+                    );
+                    entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+                    let excess = total_len - self.max_flows;
+                    for (key, _) in entries.into_iter().take(excess) {
+                        let did_remove = match key {
+                            CompactFlowKey::V4(k) => flows_v4.remove(&k).is_some(),
+                            CompactFlowKey::V6(k) => flows_v6.remove(&k).is_some(),
+                        };
+                        if did_remove {
+                            removed += 1;
+                        }
+                    }
                 }
             }
         }
@@ -474,38 +854,92 @@ impl FlowTracker {
         if n == 0 {
             return Vec::new();
         }
-        let mut deltas: Vec<FlowDelta> = self
-            .flows
-            .iter()
-            .filter_map(|(key, entry)| {
-                let total = entry.total_bytes();
-                let delta = total.saturating_sub(entry.last_report_bytes_stats);
-                if delta > 0 {
-                    Some(FlowDelta {
-                        key: key.clone(),
-                        delta_bytes: delta,
+        match &mut self.store {
+            FlowStore::Full(flows) => {
+                let mut deltas: Vec<FlowDelta> = flows
+                    .iter()
+                    .filter_map(|(key, entry)| {
+                        let total = entry.total_bytes();
+                        let delta = total.saturating_sub(entry.last_report_bytes_stats);
+                        if delta > 0 {
+                            Some(FlowDelta {
+                                key: key.clone(),
+                                delta_bytes: delta,
+                            })
+                        } else {
+                            None
+                        }
                     })
-                } else {
-                    None
+                    .collect();
+
+                let top_n = n.min(deltas.len());
+                if top_n > 0 && top_n < deltas.len() {
+                    deltas.select_nth_unstable_by(top_n - 1, |a, b| {
+                        b.delta_bytes.cmp(&a.delta_bytes)
+                    });
+                    deltas.truncate(top_n);
                 }
-            })
-            .collect();
+                deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
 
-        // O(F) partial sort: partition so the top-N are at the front, then sort only those.
-        let top_n = n.min(deltas.len());
-        if top_n > 0 && top_n < deltas.len() {
-            deltas.select_nth_unstable_by(top_n - 1, |a, b| b.delta_bytes.cmp(&a.delta_bytes));
-            deltas.truncate(top_n);
-        }
-        deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+                for d in &deltas {
+                    if let Some(entry) = flows.get_mut(&d.key) {
+                        entry.last_report_bytes_stats = entry.total_bytes();
+                    }
+                }
+                deltas
+            }
+            FlowStore::Scale { flows_v4, flows_v6 } => {
+                let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
+                deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
+                    let total = entry.total_bytes();
+                    let delta = total.saturating_sub(entry.last_report_bytes_stats);
+                    if delta > 0 {
+                        Some((CompactFlowKey::V4(*key), delta))
+                    } else {
+                        None
+                    }
+                }));
+                deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
+                    let total = entry.total_bytes();
+                    let delta = total.saturating_sub(entry.last_report_bytes_stats);
+                    if delta > 0 {
+                        Some((CompactFlowKey::V6(*key), delta))
+                    } else {
+                        None
+                    }
+                }));
 
-        // Only reset counters for the flows we're reporting
-        for d in &deltas {
-            if let Some(entry) = self.flows.get_mut(&d.key) {
-                entry.last_report_bytes_stats = entry.total_bytes();
+                let top_n = n.min(deltas.len());
+                if top_n > 0 && top_n < deltas.len() {
+                    deltas.select_nth_unstable_by(top_n - 1, |a, b| b.1.cmp(&a.1));
+                    deltas.truncate(top_n);
+                }
+                deltas.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+                for (key, _) in &deltas {
+                    match key {
+                        CompactFlowKey::V4(k) => {
+                            if let Some(entry) = flows_v4.get_mut(k) {
+                                entry.last_report_bytes_stats = entry.total_bytes();
+                            }
+                        }
+                        CompactFlowKey::V6(k) => {
+                            if let Some(entry) = flows_v6.get_mut(k) {
+                                entry.last_report_bytes_stats = entry.total_bytes();
+                            }
+                        }
+                    }
+                }
+
+                deltas
+                    .into_iter()
+                    .map(|(key, delta_bytes)| FlowDelta {
+                        key: key.to_flow_key(),
+                        delta_bytes,
+                    })
+                    .collect()
             }
         }
-        deltas
     }
 
     /// Return top-N flows by delta bytes, paired with their full snapshot.
@@ -517,48 +951,128 @@ impl FlowTracker {
         if n == 0 {
             return Vec::new();
         }
-        let mut deltas: Vec<FlowDelta> = self
-            .flows
-            .iter()
-            .filter_map(|(key, entry)| {
-                let total = entry.total_bytes();
-                let delta = total.saturating_sub(entry.last_report_bytes_web);
-                if delta > 0 {
-                    Some(FlowDelta {
-                        key: key.clone(),
-                        delta_bytes: delta,
+        match &mut self.store {
+            FlowStore::Full(flows) => {
+                let mut deltas: Vec<FlowDelta> = flows
+                    .iter()
+                    .filter_map(|(key, entry)| {
+                        let total = entry.total_bytes();
+                        let delta = total.saturating_sub(entry.last_report_bytes_web);
+                        if delta > 0 {
+                            Some(FlowDelta {
+                                key: key.clone(),
+                                delta_bytes: delta,
+                            })
+                        } else {
+                            None
+                        }
                     })
-                } else {
-                    None
+                    .collect();
+
+                let top_n = n.min(deltas.len());
+                if top_n > 0 && top_n < deltas.len() {
+                    deltas.select_nth_unstable_by(top_n - 1, |a, b| {
+                        b.delta_bytes.cmp(&a.delta_bytes)
+                    });
+                    deltas.truncate(top_n);
                 }
-            })
-            .collect();
+                deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
 
-        // O(F) partial sort: partition so the top-N are at the front, then sort only those.
-        let top_n = n.min(deltas.len());
-        if top_n > 0 && top_n < deltas.len() {
-            deltas.select_nth_unstable_by(top_n - 1, |a, b| b.delta_bytes.cmp(&a.delta_bytes));
-            deltas.truncate(top_n);
-        }
-        deltas.sort_unstable_by(|a, b| b.delta_bytes.cmp(&a.delta_bytes));
+                let mut result = Vec::with_capacity(deltas.len());
+                for d in deltas {
+                    if let Some(entry) = flows.get_mut(&d.key) {
+                        entry.last_report_bytes_web = entry.total_bytes();
+                        let snap = FlowSnapshot::from_entry(&d.key, entry);
+                        result.push((d, snap));
+                    }
+                }
+                result
+            }
+            FlowStore::Scale { flows_v4, flows_v6 } => {
+                let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
+                deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
+                    let total = entry.total_bytes();
+                    let delta = total.saturating_sub(entry.last_report_bytes_web);
+                    if delta > 0 {
+                        Some((CompactFlowKey::V4(*key), delta))
+                    } else {
+                        None
+                    }
+                }));
+                deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
+                    let total = entry.total_bytes();
+                    let delta = total.saturating_sub(entry.last_report_bytes_web);
+                    if delta > 0 {
+                        Some((CompactFlowKey::V6(*key), delta))
+                    } else {
+                        None
+                    }
+                }));
 
-        let mut result = Vec::with_capacity(deltas.len());
-        for d in deltas {
-            if let Some(entry) = self.flows.get_mut(&d.key) {
-                entry.last_report_bytes_web = entry.total_bytes();
-                let snap = FlowSnapshot::from_entry(&d.key, entry);
-                result.push((d, snap));
+                let top_n = n.min(deltas.len());
+                if top_n > 0 && top_n < deltas.len() {
+                    deltas.select_nth_unstable_by(top_n - 1, |a, b| b.1.cmp(&a.1));
+                    deltas.truncate(top_n);
+                }
+                deltas.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+                let mut result = Vec::with_capacity(deltas.len());
+                for (compact_key, delta_bytes) in deltas {
+                    match compact_key {
+                        CompactFlowKey::V4(key) => {
+                            if let Some(entry) = flows_v4.get_mut(&key) {
+                                entry.last_report_bytes_web = entry.total_bytes();
+                                let flow_key = CompactFlowKey::V4(key).to_flow_key();
+                                let snap = FlowSnapshot::from_scale_entry(&flow_key, entry);
+                                result.push((
+                                    FlowDelta {
+                                        key: flow_key,
+                                        delta_bytes,
+                                    },
+                                    snap,
+                                ));
+                            }
+                        }
+                        CompactFlowKey::V6(key) => {
+                            if let Some(entry) = flows_v6.get_mut(&key) {
+                                entry.last_report_bytes_web = entry.total_bytes();
+                                let flow_key = CompactFlowKey::V6(key).to_flow_key();
+                                let snap = FlowSnapshot::from_scale_entry(&flow_key, entry);
+                                result.push((
+                                    FlowDelta {
+                                        key: flow_key,
+                                        delta_bytes,
+                                    },
+                                    snap,
+                                ));
+                            }
+                        }
+                    }
+                }
+                result
             }
         }
-        result
     }
 
     pub fn snapshot(&self) -> Vec<FlowSnapshot> {
-        let mut flows: Vec<FlowSnapshot> = self
-            .flows
-            .iter()
-            .map(|(key, entry)| FlowSnapshot::from_entry(key, entry))
-            .collect();
+        let mut flows: Vec<FlowSnapshot> = match &self.store {
+            FlowStore::Full(table) => table
+                .iter()
+                .map(|(key, entry)| FlowSnapshot::from_entry(key, entry))
+                .collect(),
+            FlowStore::Scale { flows_v4, flows_v6 } => {
+                let mut out = Vec::with_capacity(flows_v4.len() + flows_v6.len());
+                out.extend(flows_v4.iter().map(|(key, entry)| {
+                    let flow_key = CompactFlowKey::V4(*key).to_flow_key();
+                    FlowSnapshot::from_scale_entry(&flow_key, entry)
+                }));
+                out.extend(flows_v6.iter().map(|(key, entry)| {
+                    let flow_key = CompactFlowKey::V6(*key).to_flow_key();
+                    FlowSnapshot::from_scale_entry(&flow_key, entry)
+                }));
+                out
+            }
+        };
         flows.sort_by(|a, b| b.bytes_total.cmp(&a.bytes_total));
         flows
     }
@@ -572,41 +1086,130 @@ impl FlowTracker {
         keys: &[FlowKey],
         n: usize,
     ) -> Vec<(FlowDelta, FlowSnapshot)> {
+        let compact_keys: Vec<CompactFlowKey> = keys
+            .iter()
+            .filter_map(CompactFlowKey::from_flow_key)
+            .collect();
+        self.top_flows_with_snapshot_for_compact_keys(&compact_keys, n)
+    }
+
+    pub(crate) fn top_flows_with_snapshot_for_compact_keys(
+        &mut self,
+        keys: &[CompactFlowKey],
+        n: usize,
+    ) -> Vec<(FlowDelta, FlowSnapshot)> {
         if n == 0 {
             return Vec::new();
         }
 
-        let mut seen = AHashSet::with_capacity(keys.len());
-        let mut out = Vec::with_capacity(keys.len());
-        for key in keys {
-            if !seen.insert(key.clone()) {
-                continue;
-            }
-            if let Some(entry) = self.flows.get_mut(key) {
-                let total = entry.total_bytes();
-                let delta = total.saturating_sub(entry.last_report_bytes_web);
-                if delta > 0 {
-                    out.push((
-                        FlowDelta {
-                            key: key.clone(),
-                            delta_bytes: delta,
-                        },
-                        FlowSnapshot::from_entry(key, entry),
-                    ));
+        match &mut self.store {
+            FlowStore::Full(flows) => {
+                let mut seen = AHashSet::with_capacity(keys.len());
+                let mut out = Vec::with_capacity(keys.len());
+                for compact_key in keys {
+                    if !seen.insert(*compact_key) {
+                        continue;
+                    }
+                    let key = compact_key.to_flow_key();
+                    if let Some(entry) = flows.get_mut(&key) {
+                        let total = entry.total_bytes();
+                        let delta = total.saturating_sub(entry.last_report_bytes_web);
+                        if delta > 0 {
+                            out.push((
+                                FlowDelta {
+                                    key: key.clone(),
+                                    delta_bytes: delta,
+                                },
+                                FlowSnapshot::from_entry(&key, entry),
+                            ));
+                        }
+                    }
                 }
+
+                out.sort_unstable_by(|a, b| b.0.delta_bytes.cmp(&a.0.delta_bytes));
+                out.truncate(n.min(out.len()));
+
+                for (delta, _) in &out {
+                    if let Some(entry) = flows.get_mut(&delta.key) {
+                        entry.last_report_bytes_web = entry.total_bytes();
+                    }
+                }
+
+                out
+            }
+            FlowStore::Scale { flows_v4, flows_v6 } => {
+                let mut seen = AHashSet::with_capacity(keys.len());
+                let mut out: Vec<(CompactFlowKey, u64, FlowSnapshot)> =
+                    Vec::with_capacity(keys.len());
+
+                for compact_key in keys {
+                    if !seen.insert(*compact_key) {
+                        continue;
+                    }
+
+                    match compact_key {
+                        CompactFlowKey::V4(k) => {
+                            if let Some(entry) = flows_v4.get_mut(k) {
+                                let total = entry.total_bytes();
+                                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                                if delta > 0 {
+                                    let flow_key = CompactFlowKey::V4(*k).to_flow_key();
+                                    out.push((
+                                        CompactFlowKey::V4(*k),
+                                        delta,
+                                        FlowSnapshot::from_scale_entry(&flow_key, entry),
+                                    ));
+                                }
+                            }
+                        }
+                        CompactFlowKey::V6(k) => {
+                            if let Some(entry) = flows_v6.get_mut(k) {
+                                let total = entry.total_bytes();
+                                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                                if delta > 0 {
+                                    let flow_key = CompactFlowKey::V6(*k).to_flow_key();
+                                    out.push((
+                                        CompactFlowKey::V6(*k),
+                                        delta,
+                                        FlowSnapshot::from_scale_entry(&flow_key, entry),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                out.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+                out.truncate(n.min(out.len()));
+
+                for (compact_key, _, _) in &out {
+                    match compact_key {
+                        CompactFlowKey::V4(k) => {
+                            if let Some(entry) = flows_v4.get_mut(k) {
+                                entry.last_report_bytes_web = entry.total_bytes();
+                            }
+                        }
+                        CompactFlowKey::V6(k) => {
+                            if let Some(entry) = flows_v6.get_mut(k) {
+                                entry.last_report_bytes_web = entry.total_bytes();
+                            }
+                        }
+                    }
+                }
+
+                out.into_iter()
+                    .map(|(compact_key, delta_bytes, snapshot)| {
+                        (
+                            FlowDelta {
+                                key: compact_key.to_flow_key(),
+                                delta_bytes,
+                            },
+                            snapshot,
+                        )
+                    })
+                    .collect()
             }
         }
-
-        out.sort_unstable_by(|a, b| b.0.delta_bytes.cmp(&a.0.delta_bytes));
-        out.truncate(n.min(out.len()));
-
-        for (delta, _) in &out {
-            if let Some(entry) = self.flows.get_mut(&delta.key) {
-                entry.last_report_bytes_web = entry.total_bytes();
-            }
-        }
-
-        out
     }
 }
 
@@ -643,6 +1246,41 @@ impl FlowSnapshot {
             rtt_min_ms: entry.rtt_min_ms,
             rtt_ewma_ms: entry.rtt_ewma_ms,
             rtt_samples: entry.rtt_samples,
+        }
+    }
+
+    fn from_scale_entry(key: &FlowKey, entry: &ScaleFlowEntry) -> Self {
+        let duration = (entry.last_seen - entry.first_seen).max(0.0);
+        let bytes_total = entry.total_bytes();
+        let packets_total = entry.total_packets();
+        let avg_bps = if duration > 0.0 {
+            bytes_total as f64 * 8.0 / duration
+        } else {
+            0.0
+        };
+
+        FlowSnapshot {
+            protocol: key.protocol,
+            endpoint_a: key.a,
+            endpoint_b: key.b,
+            first_seen: entry.first_seen,
+            last_seen: entry.last_seen,
+            duration_secs: duration,
+            packets_a_to_b: entry.packets_a_to_b,
+            packets_b_to_a: entry.packets_b_to_a,
+            bytes_a_to_b: entry.bytes_a_to_b,
+            bytes_b_to_a: entry.bytes_b_to_a,
+            packets_total,
+            bytes_total,
+            avg_bps,
+            tcp_state: entry.tcp_state,
+            client: entry.client,
+            retransmissions: 0,
+            out_of_order: 0,
+            rtt_last_ms: None,
+            rtt_min_ms: None,
+            rtt_ewma_ms: None,
+            rtt_samples: 0,
         }
     }
 }
@@ -712,6 +1350,10 @@ pub fn flow_key_from_packet(packet: &ParsedPacket<'_>) -> Option<FlowKey> {
 
     let (key, _) = FlowKey::new(protocol, src, dst);
     Some(key)
+}
+
+pub(crate) fn flow_compact_key_from_packet(packet: &ParsedPacket<'_>) -> Option<CompactFlowKey> {
+    flow_key_from_packet(packet).and_then(|key| CompactFlowKey::from_flow_key(&key))
 }
 
 pub fn write_flow_json(
@@ -1000,6 +1642,72 @@ mod tests {
         assert_eq!(key.a, v4);
         assert_eq!(key.b, v6);
         assert_eq!(dir, FlowDirection::BtoA);
+    }
+
+    #[test]
+    fn compact_v4_key_matches_canonical_flow_key() {
+        let a_ip = Ipv4Addr::new(10, 1, 2, 3);
+        let b_ip = Ipv4Addr::new(10, 9, 8, 7);
+        let a_port = 44444;
+        let b_port = 443;
+
+        let (compact_ab, dir_ab) = FlowKeyV4::new(FlowProtocol::Tcp, a_ip, a_port, b_ip, b_port);
+        let (compact_ba, dir_ba) = FlowKeyV4::new(FlowProtocol::Tcp, b_ip, b_port, a_ip, a_port);
+        assert_eq!(compact_ab, compact_ba);
+        assert_ne!(dir_ab, dir_ba);
+
+        let a = Endpoint {
+            ip: IpAddr::V4(a_ip),
+            port: a_port,
+        };
+        let b = Endpoint {
+            ip: IpAddr::V4(b_ip),
+            port: b_port,
+        };
+        let (full, _) = FlowKey::new(FlowProtocol::Tcp, a, b);
+        assert_eq!(compact_ab.to_flow_key(), full);
+    }
+
+    #[test]
+    fn compact_v6_key_matches_canonical_flow_key() {
+        let a_ip = Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 3, 4, 5, 6);
+        let b_ip = Ipv6Addr::new(0x2001, 0xdb8, 9, 8, 7, 6, 5, 4);
+        let a_port = 5353;
+        let b_port = 443;
+
+        let (compact_ab, dir_ab) = FlowKeyV6::new(FlowProtocol::Udp, a_ip, a_port, b_ip, b_port);
+        let (compact_ba, dir_ba) = FlowKeyV6::new(FlowProtocol::Udp, b_ip, b_port, a_ip, a_port);
+        assert_eq!(compact_ab, compact_ba);
+        assert_ne!(dir_ab, dir_ba);
+
+        let a = Endpoint {
+            ip: IpAddr::V6(a_ip),
+            port: a_port,
+        };
+        let b = Endpoint {
+            ip: IpAddr::V6(b_ip),
+            port: b_port,
+        };
+        let (full, _) = FlowKey::new(FlowProtocol::Udp, a, b);
+        assert_eq!(compact_ab.to_flow_key(), full);
+    }
+
+    #[test]
+    fn flow_tracker_uses_scale_store_when_deep_tcp_features_disabled() {
+        let tracker = FlowTracker::new(60.0, 1000, false, false, false);
+        assert!(matches!(tracker.store, FlowStore::Scale { .. }));
+
+        let tracker_full = FlowTracker::new(60.0, 1000, true, false, false);
+        assert!(matches!(tracker_full.store, FlowStore::Full(_)));
+    }
+
+    #[test]
+    fn layout_sizes_phase4() {
+        use std::mem::size_of;
+
+        assert_eq!(size_of::<FlowKeyV4>(), 16);
+        assert_eq!(size_of::<FlowKeyV6>(), 40);
+        assert!(size_of::<ScaleFlowEntry>() < size_of::<FlowEntry>());
     }
 
     #[test]

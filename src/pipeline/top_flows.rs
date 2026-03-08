@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 
-use crate::flow::FlowKey;
+use crate::flow::CompactFlowKey;
 
 #[derive(Debug, Clone, Copy)]
 struct Counter {
@@ -14,7 +14,7 @@ struct Counter {
 #[derive(Debug)]
 pub struct SpaceSavingTopFlows {
     capacity: usize,
-    counters: AHashMap<FlowKey, Counter>,
+    counters: AHashMap<CompactFlowKey, Counter>,
 }
 
 impl SpaceSavingTopFlows {
@@ -32,7 +32,7 @@ impl SpaceSavingTopFlows {
     }
 
     /// Record observed bytes for a flow in the current tick window.
-    pub fn observe(&mut self, key: &FlowKey, bytes: u64) {
+    pub(crate) fn observe(&mut self, key: &CompactFlowKey, bytes: u64) {
         if self.capacity == 0 || bytes == 0 {
             return;
         }
@@ -68,13 +68,13 @@ impl SpaceSavingTopFlows {
     }
 
     /// Return top-N candidate flow keys and byte counts, then clear state.
-    pub fn take_top(&mut self, n: usize) -> Vec<(FlowKey, u64)> {
+    pub(crate) fn take_top(&mut self, n: usize) -> Vec<(CompactFlowKey, u64)> {
         if n == 0 {
             self.counters.clear();
             return Vec::new();
         }
 
-        let mut top: Vec<(FlowKey, u64)> = self
+        let mut top: Vec<(CompactFlowKey, u64)> = self
             .counters
             .iter()
             .map(|(key, counter)| (key.clone(), counter.bytes))
@@ -90,10 +90,10 @@ impl SpaceSavingTopFlows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::{Endpoint, FlowKey, FlowProtocol};
+    use crate::flow::{CompactFlowKey, Endpoint, FlowKey, FlowProtocol};
     use std::net::{IpAddr, Ipv4Addr};
 
-    fn key(a: u8, b: u8, src_port: u16, dst_port: u16) -> FlowKey {
+    fn key(a: u8, b: u8, src_port: u16, dst_port: u16) -> CompactFlowKey {
         let src = Endpoint {
             ip: IpAddr::V4(Ipv4Addr::new(10, 0, 0, a)),
             port: src_port,
@@ -103,7 +103,7 @@ mod tests {
             port: dst_port,
         };
         let (k, _) = FlowKey::new(FlowProtocol::Tcp, src, dst);
-        k
+        CompactFlowKey::from_flow_key(&k).unwrap()
     }
 
     #[test]

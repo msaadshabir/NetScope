@@ -168,7 +168,7 @@ impl Worker {
                 self.flow_tracker.observe(pkt.ts, pkt.wire_len, &parsed);
 
                 if self.heavy_hitter_top_n > 0 {
-                    if let Some(key) = crate::flow::flow_key_from_packet(&parsed) {
+                    if let Some(key) = crate::flow::flow_compact_key_from_packet(&parsed) {
                         self.top_flows_hh.observe(&key, pkt.wire_len);
                     }
                 }
@@ -210,11 +210,11 @@ impl Worker {
 
     fn emit_tick(&mut self, agg_tx: &Sender<WorkerEvent>) {
         let candidates = self.top_flows_hh.take_top(self.heavy_hitter_top_n);
-        let candidate_keys: Vec<crate::flow::FlowKey> =
-            candidates.iter().map(|(key, _)| key.clone()).collect();
+        let candidate_keys: Vec<crate::flow::CompactFlowKey> =
+            candidates.iter().map(|(key, _)| *key).collect();
         let top_flows = self
             .flow_tracker
-            .top_flows_with_snapshot_for_keys(&candidate_keys, self.heavy_hitter_top_n);
+            .top_flows_with_snapshot_for_compact_keys(&candidate_keys, self.heavy_hitter_top_n);
 
         let tick = ShardTick {
             shard_id: self.shard_id,
