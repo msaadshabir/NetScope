@@ -81,6 +81,7 @@ See [Sharded Pipeline](pipeline.md) for architecture and tuning details.
 | Flag | Short | Description |
 |---|---|---|
 | `--config <PATH>` | | Load a TOML configuration file. CLI flags override config values. |
+| `--synthetic-flows <N>` | | Insert `N` synthetic scale-mode flows and print memory stats, then exit. Useful for memory-budget validation. |
 | `--help` | `-h` | Print help text. |
 | `--version` | `-V` | Print version. |
 

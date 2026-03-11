@@ -92,6 +92,22 @@ immediate_mode = true
 - Note: in pipeline mode, `max_flows` is per-shard, so the effective limit is `max_flows * num_workers`.
 - For large flow-count runs, disable deep TCP analysis (`analysis.rtt = false`, `analysis.retrans = false`, `analysis.out_of_order = false`) to activate scale-mode flow storage.
 
+### Memory validation
+
+Use the synthetic flow path to quickly validate scale-mode memory usage:
+
+```bash
+cargo run --release -- --synthetic-flows 1000000
+```
+
+This prints insertion time, estimated RSS, and a pass/fail check against the 500MB budget.
+
+For a test-target workflow, run the long ignored test:
+
+```bash
+cargo test --release -- --ignored memory_scale_1m
+```
+
 ### CPU usage
 
 - Pipeline mode with auto-detected workers uses half the available CPU cores (clamped 1..8).

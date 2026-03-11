@@ -262,53 +262,124 @@ pub enum TcpState {
 }
 
 #[derive(Debug, Clone)]
+#[repr(C)]
 struct ScaleFlowEntry {
-    first_seen: f64,
-    last_seen: f64,
-    packets_a_to_b: u64,
-    packets_b_to_a: u64,
     bytes_a_to_b: u64,
     bytes_b_to_a: u64,
-    tcp_state: Option<TcpState>,
-    client: Option<FlowDirection>,
-    last_report_bytes_stats: u64,
-    last_report_bytes_web: u64,
+    first_seen_ms: u32,
+    last_seen_ms: u32,
+    packets_a_to_b: u32,
+    packets_b_to_a: u32,
+    first_seen_sub_ms_us: u16,
+    last_seen_sub_ms_us: u16,
+    tcp_state: u8,
+    client: u8,
+    _pad: [u8; 2],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ScaleReportMarks {
+    stats_total: u64,
+    web_total: u64,
+}
+
+const SCALE_TCP_STATE_NONE: u8 = 7;
+
+#[inline]
+fn scale_base_ms(ts: f64) -> u64 {
+    if ts.is_finite() && ts > 0.0 {
+        (ts * 1000.0).floor().min(u64::MAX as f64) as u64
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn scale_abs_us(ts: f64) -> u64 {
+    if ts.is_finite() && ts > 0.0 {
+        (ts * 1_000_000.0).round().min(u64::MAX as f64) as u64
+    } else {
+        0
+    }
+}
+
+#[inline]
+fn scale_encode_ts(ts: f64, time_base_ms: u64) -> (u32, u16) {
+    let abs_us = scale_abs_us(ts);
+    let base_us = time_base_ms.saturating_mul(1000);
+    let offset_us = abs_us.saturating_sub(base_us);
+    let offset_ms = (offset_us / 1000).min(u32::MAX as u64) as u32;
+    let sub_ms_us = (offset_us % 1000) as u16;
+    (offset_ms, sub_ms_us)
+}
+
+#[inline]
+fn scale_decode_ts(time_base_ms: u64, offset_ms: u32, sub_ms_us: u16) -> f64 {
+    let total_us = time_base_ms
+        .saturating_mul(1000)
+        .saturating_add(offset_ms as u64 * 1000)
+        .saturating_add(sub_ms_us as u64);
+    total_us as f64 / 1_000_000.0
+}
+
+#[inline]
+fn scale_sort_key_us(time_base_ms: u64, offset_ms: u32, sub_ms_us: u16) -> u64 {
+    time_base_ms
+        .saturating_mul(1000)
+        .saturating_add(offset_ms as u64 * 1000)
+        .saturating_add(sub_ms_us as u64)
 }
 
 impl ScaleFlowEntry {
-    fn new(ts: f64, protocol: FlowProtocol) -> Self {
+    fn new(ts: f64, protocol: FlowProtocol, time_base_ms: u64) -> Self {
+        let (first_seen_ms, first_seen_sub_ms_us) = scale_encode_ts(ts, time_base_ms);
+        let tcp_state = match protocol {
+            FlowProtocol::Tcp => Some(TcpState::Unknown),
+            FlowProtocol::Udp => None,
+        };
         ScaleFlowEntry {
-            first_seen: ts,
-            last_seen: ts,
-            packets_a_to_b: 0,
-            packets_b_to_a: 0,
             bytes_a_to_b: 0,
             bytes_b_to_a: 0,
-            tcp_state: match protocol {
-                FlowProtocol::Tcp => Some(TcpState::Unknown),
-                FlowProtocol::Udp => None,
-            },
-            client: None,
-            last_report_bytes_stats: 0,
-            last_report_bytes_web: 0,
+            first_seen_ms,
+            last_seen_ms: first_seen_ms,
+            packets_a_to_b: 0,
+            packets_b_to_a: 0,
+            first_seen_sub_ms_us,
+            last_seen_sub_ms_us: first_seen_sub_ms_us,
+            tcp_state: Self::encode_tcp_state(tcp_state),
+            client: Self::encode_client(None),
+            _pad: [0; 2],
         }
     }
 
     #[inline]
-    fn observe(&mut self, ts: f64, direction: FlowDirection, bytes: u64, flags: Option<TcpFlags>) {
-        self.last_seen = ts;
+    fn observe(
+        &mut self,
+        ts: f64,
+        time_base_ms: u64,
+        direction: FlowDirection,
+        bytes: u64,
+        flags: Option<TcpFlags>,
+    ) {
+        let (last_seen_ms, last_seen_sub_ms_us) = scale_encode_ts(ts, time_base_ms);
+        self.last_seen_ms = last_seen_ms;
+        self.last_seen_sub_ms_us = last_seen_sub_ms_us;
         match direction {
             FlowDirection::AtoB => {
-                self.packets_a_to_b += 1;
-                self.bytes_a_to_b += bytes;
+                self.packets_a_to_b = self.packets_a_to_b.saturating_add(1);
+                self.bytes_a_to_b = self.bytes_a_to_b.saturating_add(bytes);
             }
             FlowDirection::BtoA => {
-                self.packets_b_to_a += 1;
-                self.bytes_b_to_a += bytes;
+                self.packets_b_to_a = self.packets_b_to_a.saturating_add(1);
+                self.bytes_b_to_a = self.bytes_b_to_a.saturating_add(bytes);
             }
         }
         if let Some(flags) = flags {
-            update_tcp_state_fields(&mut self.tcp_state, &mut self.client, flags, direction);
+            let mut tcp_state = self.tcp_state();
+            let mut client = self.client();
+            update_tcp_state_fields(&mut tcp_state, &mut client, flags, direction);
+            self.set_tcp_state(tcp_state);
+            self.set_client(client);
         }
     }
 
@@ -319,7 +390,88 @@ impl ScaleFlowEntry {
 
     #[inline]
     fn total_packets(&self) -> u64 {
-        self.packets_a_to_b + self.packets_b_to_a
+        self.packets_a_to_b as u64 + self.packets_b_to_a as u64
+    }
+
+    #[inline]
+    fn first_seen(&self, time_base_ms: u64) -> f64 {
+        scale_decode_ts(time_base_ms, self.first_seen_ms, self.first_seen_sub_ms_us)
+    }
+
+    #[inline]
+    fn last_seen(&self, time_base_ms: u64) -> f64 {
+        scale_decode_ts(time_base_ms, self.last_seen_ms, self.last_seen_sub_ms_us)
+    }
+
+    #[inline]
+    fn last_seen_sort_key(&self, time_base_ms: u64) -> u64 {
+        scale_sort_key_us(time_base_ms, self.last_seen_ms, self.last_seen_sub_ms_us)
+    }
+
+    #[inline]
+    fn tcp_state(&self) -> Option<TcpState> {
+        Self::decode_tcp_state(self.tcp_state)
+    }
+
+    #[inline]
+    fn set_tcp_state(&mut self, state: Option<TcpState>) {
+        self.tcp_state = Self::encode_tcp_state(state);
+    }
+
+    #[inline]
+    fn client(&self) -> Option<FlowDirection> {
+        Self::decode_client(self.client)
+    }
+
+    #[inline]
+    fn set_client(&mut self, client: Option<FlowDirection>) {
+        self.client = Self::encode_client(client);
+    }
+
+    #[inline]
+    fn encode_tcp_state(state: Option<TcpState>) -> u8 {
+        match state {
+            Some(TcpState::SynSent) => 0,
+            Some(TcpState::SynAck) => 1,
+            Some(TcpState::Established) => 2,
+            Some(TcpState::FinWait) => 3,
+            Some(TcpState::Closed) => 4,
+            Some(TcpState::Reset) => 5,
+            Some(TcpState::Unknown) => 6,
+            None => SCALE_TCP_STATE_NONE,
+        }
+    }
+
+    #[inline]
+    fn decode_tcp_state(code: u8) -> Option<TcpState> {
+        match code {
+            0 => Some(TcpState::SynSent),
+            1 => Some(TcpState::SynAck),
+            2 => Some(TcpState::Established),
+            3 => Some(TcpState::FinWait),
+            4 => Some(TcpState::Closed),
+            5 => Some(TcpState::Reset),
+            6 => Some(TcpState::Unknown),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    fn encode_client(client: Option<FlowDirection>) -> u8 {
+        match client {
+            Some(FlowDirection::AtoB) => 1,
+            Some(FlowDirection::BtoA) => 2,
+            None => 0,
+        }
+    }
+
+    #[inline]
+    fn decode_client(code: u8) -> Option<FlowDirection> {
+        match code {
+            1 => Some(FlowDirection::AtoB),
+            2 => Some(FlowDirection::BtoA),
+            _ => None,
+        }
     }
 }
 
@@ -601,8 +753,11 @@ impl CompactFlowKey {
 enum FlowStore {
     Full(AHashMap<FlowKey, FlowEntry>),
     Scale {
+        time_base_ms: u64,
         flows_v4: AHashMap<FlowKeyV4, ScaleFlowEntry>,
         flows_v6: AHashMap<FlowKeyV6, ScaleFlowEntry>,
+        reports_v4: AHashMap<FlowKeyV4, ScaleReportMarks>,
+        reports_v6: AHashMap<FlowKeyV6, ScaleReportMarks>,
     },
 }
 
@@ -641,8 +796,11 @@ impl FlowTracker {
         let scale_mode = !track_rtt && !track_retrans && !track_out_of_order;
         let store = if scale_mode {
             FlowStore::Scale {
+                time_base_ms: 0,
                 flows_v4: AHashMap::with_capacity(initial_capacity),
                 flows_v6: AHashMap::with_capacity(initial_capacity / 8),
+                reports_v4: AHashMap::new(),
+                reports_v6: AHashMap::new(),
             }
         } else {
             FlowStore::Full(AHashMap::with_capacity(initial_capacity))
@@ -662,7 +820,71 @@ impl FlowTracker {
     pub fn len(&self) -> usize {
         match &self.store {
             FlowStore::Full(flows) => flows.len(),
-            FlowStore::Scale { flows_v4, flows_v6 } => flows_v4.len() + flows_v6.len(),
+            FlowStore::Scale {
+                flows_v4, flows_v6, ..
+            } => flows_v4.len() + flows_v6.len(),
+        }
+    }
+
+    pub fn is_scale_mode(&self) -> bool {
+        matches!(self.store, FlowStore::Scale { .. })
+    }
+
+    /// Insert synthetic IPv4 flows directly into the table.
+    ///
+    /// This is used by memory verification tooling to stress the storage layer
+    /// without protocol parsing overhead.
+    pub fn insert_synthetic_ipv4_flows(&mut self, count: usize) {
+        #[inline]
+        fn ip_from_index(prefix_a: u8, prefix_b: u8, idx: u32) -> std::net::Ipv4Addr {
+            std::net::Ipv4Addr::new(
+                prefix_a,
+                prefix_b,
+                ((idx >> 8) & 0xFF) as u8,
+                (idx & 0xFF) as u8,
+            )
+        }
+
+        match &mut self.store {
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                reports_v4,
+                ..
+            } => {
+                if *time_base_ms == 0 {
+                    *time_base_ms = scale_base_ms(0.0);
+                }
+                for i in 0..count as u32 {
+                    let src_ip = ip_from_index(10, ((i >> 16) & 0xFF) as u8, i);
+                    let dst_ip = ip_from_index(172, 16, i);
+                    let src_port = 1024 + (i % 48_000) as u16;
+                    let dst_port = 80;
+                    let (key, _dir) =
+                        FlowKeyV4::new(FlowProtocol::Tcp, src_ip, src_port, dst_ip, dst_port);
+                    let base = *time_base_ms;
+                    flows_v4
+                        .entry(key)
+                        .or_insert_with(|| ScaleFlowEntry::new(0.0, FlowProtocol::Tcp, base));
+                    reports_v4.entry(key).or_default();
+                }
+            }
+            FlowStore::Full(flows) => {
+                for i in 0..count as u32 {
+                    let src = Endpoint {
+                        ip: IpAddr::V4(ip_from_index(10, ((i >> 16) & 0xFF) as u8, i)),
+                        port: 1024 + (i % 48_000) as u16,
+                    };
+                    let dst = Endpoint {
+                        ip: IpAddr::V4(ip_from_index(172, 16, i)),
+                        port: 80,
+                    };
+                    let (key, _dir) = FlowKey::new(FlowProtocol::Tcp, src, dst);
+                    flows
+                        .entry(key)
+                        .or_insert_with(|| FlowEntry::new(0.0, FlowProtocol::Tcp));
+                }
+            }
         }
     }
 
@@ -747,24 +969,39 @@ impl FlowTracker {
                     }
                 }
             }
-            FlowStore::Scale { flows_v4, flows_v6 } => match ips {
-                ParsedFlowIps::V4(src_ip, dst_ip) => {
-                    let (key, direction) =
-                        FlowKeyV4::new(protocol, src_ip, src_port, dst_ip, dst_port);
-                    let entry = flows_v4
-                        .entry(key)
-                        .or_insert_with(|| ScaleFlowEntry::new(ts, protocol));
-                    entry.observe(ts, direction, wire_len, flags);
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                flows_v6,
+                reports_v4,
+                reports_v6,
+            } => {
+                if *time_base_ms == 0 {
+                    *time_base_ms = scale_base_ms(ts);
                 }
-                ParsedFlowIps::V6(src_ip, dst_ip) => {
-                    let (key, direction) =
-                        FlowKeyV6::new(protocol, src_ip, src_port, dst_ip, dst_port);
-                    let entry = flows_v6
-                        .entry(key)
-                        .or_insert_with(|| ScaleFlowEntry::new(ts, protocol));
-                    entry.observe(ts, direction, wire_len, flags);
+                let base = *time_base_ms;
+
+                match ips {
+                    ParsedFlowIps::V4(src_ip, dst_ip) => {
+                        let (key, direction) =
+                            FlowKeyV4::new(protocol, src_ip, src_port, dst_ip, dst_port);
+                        let entry = flows_v4
+                            .entry(key)
+                            .or_insert_with(|| ScaleFlowEntry::new(ts, protocol, base));
+                        entry.observe(ts, base, direction, wire_len, flags);
+                        reports_v4.entry(key).or_default();
+                    }
+                    ParsedFlowIps::V6(src_ip, dst_ip) => {
+                        let (key, direction) =
+                            FlowKeyV6::new(protocol, src_ip, src_port, dst_ip, dst_port);
+                        let entry = flows_v6
+                            .entry(key)
+                            .or_insert_with(|| ScaleFlowEntry::new(ts, protocol, base));
+                        entry.observe(ts, base, direction, wire_len, flags);
+                        reports_v6.entry(key).or_default();
+                    }
                 }
-            },
+            }
         }
     }
 
@@ -801,43 +1038,59 @@ impl FlowTracker {
                     }
                 }
             }
-            FlowStore::Scale { flows_v4, flows_v6 } => {
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                flows_v6,
+                reports_v4,
+                reports_v6,
+            } => {
                 if self.timeout_secs > 0.0 {
                     flows_v4.retain(|_, entry| {
-                        let keep = now - entry.last_seen <= self.timeout_secs;
+                        let keep = now - entry.last_seen(*time_base_ms) <= self.timeout_secs;
                         if !keep {
                             removed += 1;
                         }
                         keep
                     });
+                    reports_v4.retain(|key, _| flows_v4.contains_key(key));
                     flows_v6.retain(|_, entry| {
-                        let keep = now - entry.last_seen <= self.timeout_secs;
+                        let keep = now - entry.last_seen(*time_base_ms) <= self.timeout_secs;
                         if !keep {
                             removed += 1;
                         }
                         keep
                     });
+                    reports_v6.retain(|key, _| flows_v6.contains_key(key));
                 }
 
                 let total_len = flows_v4.len() + flows_v6.len();
                 if self.max_flows > 0 && total_len > self.max_flows {
-                    let mut entries: Vec<(CompactFlowKey, f64)> = Vec::with_capacity(total_len);
-                    entries.extend(
-                        flows_v4
-                            .iter()
-                            .map(|(key, entry)| (CompactFlowKey::V4(*key), entry.last_seen)),
-                    );
-                    entries.extend(
-                        flows_v6
-                            .iter()
-                            .map(|(key, entry)| (CompactFlowKey::V6(*key), entry.last_seen)),
-                    );
-                    entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
+                    let mut entries: Vec<(CompactFlowKey, u64)> = Vec::with_capacity(total_len);
+                    entries.extend(flows_v4.iter().map(|(key, entry)| {
+                        (
+                            CompactFlowKey::V4(*key),
+                            entry.last_seen_sort_key(*time_base_ms),
+                        )
+                    }));
+                    entries.extend(flows_v6.iter().map(|(key, entry)| {
+                        (
+                            CompactFlowKey::V6(*key),
+                            entry.last_seen_sort_key(*time_base_ms),
+                        )
+                    }));
+                    entries.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                     let excess = total_len - self.max_flows;
                     for (key, _) in entries.into_iter().take(excess) {
                         let did_remove = match key {
-                            CompactFlowKey::V4(k) => flows_v4.remove(&k).is_some(),
-                            CompactFlowKey::V6(k) => flows_v6.remove(&k).is_some(),
+                            CompactFlowKey::V4(k) => {
+                                reports_v4.remove(&k);
+                                flows_v4.remove(&k).is_some()
+                            }
+                            CompactFlowKey::V6(k) => {
+                                reports_v6.remove(&k);
+                                flows_v6.remove(&k).is_some()
+                            }
                         };
                         if did_remove {
                             removed += 1;
@@ -888,11 +1141,18 @@ impl FlowTracker {
                 }
                 deltas
             }
-            FlowStore::Scale { flows_v4, flows_v6 } => {
+            FlowStore::Scale {
+                flows_v4,
+                flows_v6,
+                reports_v4,
+                reports_v6,
+                ..
+            } => {
                 let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
                 deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
                     let total = entry.total_bytes();
-                    let delta = total.saturating_sub(entry.last_report_bytes_stats);
+                    let delta =
+                        total.saturating_sub(reports_v4.get(key).map_or(0, |m| m.stats_total));
                     if delta > 0 {
                         Some((CompactFlowKey::V4(*key), delta))
                     } else {
@@ -901,7 +1161,8 @@ impl FlowTracker {
                 }));
                 deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
                     let total = entry.total_bytes();
-                    let delta = total.saturating_sub(entry.last_report_bytes_stats);
+                    let delta =
+                        total.saturating_sub(reports_v6.get(key).map_or(0, |m| m.stats_total));
                     if delta > 0 {
                         Some((CompactFlowKey::V6(*key), delta))
                     } else {
@@ -920,12 +1181,14 @@ impl FlowTracker {
                     match key {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
-                                entry.last_report_bytes_stats = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v4.entry(*k).or_default().stats_total = total;
                             }
                         }
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
-                                entry.last_report_bytes_stats = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v6.entry(*k).or_default().stats_total = total;
                             }
                         }
                     }
@@ -988,11 +1251,18 @@ impl FlowTracker {
                 }
                 result
             }
-            FlowStore::Scale { flows_v4, flows_v6 } => {
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                flows_v6,
+                reports_v4,
+                reports_v6,
+            } => {
                 let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
                 deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
                     let total = entry.total_bytes();
-                    let delta = total.saturating_sub(entry.last_report_bytes_web);
+                    let delta =
+                        total.saturating_sub(reports_v4.get(key).map_or(0, |m| m.web_total));
                     if delta > 0 {
                         Some((CompactFlowKey::V4(*key), delta))
                     } else {
@@ -1001,7 +1271,8 @@ impl FlowTracker {
                 }));
                 deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
                     let total = entry.total_bytes();
-                    let delta = total.saturating_sub(entry.last_report_bytes_web);
+                    let delta =
+                        total.saturating_sub(reports_v6.get(key).map_or(0, |m| m.web_total));
                     if delta > 0 {
                         Some((CompactFlowKey::V6(*key), delta))
                     } else {
@@ -1021,9 +1292,11 @@ impl FlowTracker {
                     match compact_key {
                         CompactFlowKey::V4(key) => {
                             if let Some(entry) = flows_v4.get_mut(&key) {
-                                entry.last_report_bytes_web = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v4.entry(key).or_default().web_total = total;
                                 let flow_key = CompactFlowKey::V4(key).to_flow_key();
-                                let snap = FlowSnapshot::from_scale_entry(&flow_key, entry);
+                                let snap =
+                                    FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms);
                                 result.push((
                                     FlowDelta {
                                         key: flow_key,
@@ -1035,9 +1308,11 @@ impl FlowTracker {
                         }
                         CompactFlowKey::V6(key) => {
                             if let Some(entry) = flows_v6.get_mut(&key) {
-                                entry.last_report_bytes_web = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v6.entry(key).or_default().web_total = total;
                                 let flow_key = CompactFlowKey::V6(key).to_flow_key();
-                                let snap = FlowSnapshot::from_scale_entry(&flow_key, entry);
+                                let snap =
+                                    FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms);
                                 result.push((
                                     FlowDelta {
                                         key: flow_key,
@@ -1060,15 +1335,20 @@ impl FlowTracker {
                 .iter()
                 .map(|(key, entry)| FlowSnapshot::from_entry(key, entry))
                 .collect(),
-            FlowStore::Scale { flows_v4, flows_v6 } => {
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                flows_v6,
+                ..
+            } => {
                 let mut out = Vec::with_capacity(flows_v4.len() + flows_v6.len());
                 out.extend(flows_v4.iter().map(|(key, entry)| {
                     let flow_key = CompactFlowKey::V4(*key).to_flow_key();
-                    FlowSnapshot::from_scale_entry(&flow_key, entry)
+                    FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms)
                 }));
                 out.extend(flows_v6.iter().map(|(key, entry)| {
                     let flow_key = CompactFlowKey::V6(*key).to_flow_key();
-                    FlowSnapshot::from_scale_entry(&flow_key, entry)
+                    FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms)
                 }));
                 out
             }
@@ -1137,7 +1417,13 @@ impl FlowTracker {
 
                 out
             }
-            FlowStore::Scale { flows_v4, flows_v6 } => {
+            FlowStore::Scale {
+                time_base_ms,
+                flows_v4,
+                flows_v6,
+                reports_v4,
+                reports_v6,
+            } => {
                 let mut seen = AHashSet::with_capacity(keys.len());
                 let mut out: Vec<(CompactFlowKey, u64, FlowSnapshot)> =
                     Vec::with_capacity(keys.len());
@@ -1151,13 +1437,18 @@ impl FlowTracker {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
                                 let total = entry.total_bytes();
-                                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                                let delta = total
+                                    .saturating_sub(reports_v4.get(k).map_or(0, |m| m.web_total));
                                 if delta > 0 {
                                     let flow_key = CompactFlowKey::V4(*k).to_flow_key();
                                     out.push((
                                         CompactFlowKey::V4(*k),
                                         delta,
-                                        FlowSnapshot::from_scale_entry(&flow_key, entry),
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            entry,
+                                            *time_base_ms,
+                                        ),
                                     ));
                                 }
                             }
@@ -1165,13 +1456,18 @@ impl FlowTracker {
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
                                 let total = entry.total_bytes();
-                                let delta = total.saturating_sub(entry.last_report_bytes_web);
+                                let delta = total
+                                    .saturating_sub(reports_v6.get(k).map_or(0, |m| m.web_total));
                                 if delta > 0 {
                                     let flow_key = CompactFlowKey::V6(*k).to_flow_key();
                                     out.push((
                                         CompactFlowKey::V6(*k),
                                         delta,
-                                        FlowSnapshot::from_scale_entry(&flow_key, entry),
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            entry,
+                                            *time_base_ms,
+                                        ),
                                     ));
                                 }
                             }
@@ -1186,12 +1482,14 @@ impl FlowTracker {
                     match compact_key {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
-                                entry.last_report_bytes_web = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v4.entry(*k).or_default().web_total = total;
                             }
                         }
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
-                                entry.last_report_bytes_web = entry.total_bytes();
+                                let total = entry.total_bytes();
+                                reports_v6.entry(*k).or_default().web_total = total;
                             }
                         }
                     }
@@ -1249,8 +1547,10 @@ impl FlowSnapshot {
         }
     }
 
-    fn from_scale_entry(key: &FlowKey, entry: &ScaleFlowEntry) -> Self {
-        let duration = (entry.last_seen - entry.first_seen).max(0.0);
+    fn from_scale_entry(key: &FlowKey, entry: &ScaleFlowEntry, time_base_ms: u64) -> Self {
+        let first_seen = entry.first_seen(time_base_ms);
+        let last_seen = entry.last_seen(time_base_ms);
+        let duration = (last_seen - first_seen).max(0.0);
         let bytes_total = entry.total_bytes();
         let packets_total = entry.total_packets();
         let avg_bps = if duration > 0.0 {
@@ -1263,18 +1563,18 @@ impl FlowSnapshot {
             protocol: key.protocol,
             endpoint_a: key.a,
             endpoint_b: key.b,
-            first_seen: entry.first_seen,
-            last_seen: entry.last_seen,
+            first_seen,
+            last_seen,
             duration_secs: duration,
-            packets_a_to_b: entry.packets_a_to_b,
-            packets_b_to_a: entry.packets_b_to_a,
+            packets_a_to_b: entry.packets_a_to_b as u64,
+            packets_b_to_a: entry.packets_b_to_a as u64,
             bytes_a_to_b: entry.bytes_a_to_b,
             bytes_b_to_a: entry.bytes_b_to_a,
             packets_total,
             bytes_total,
             avg_bps,
-            tcp_state: entry.tcp_state,
-            client: entry.client,
+            tcp_state: entry.tcp_state(),
+            client: entry.client(),
             retransmissions: 0,
             out_of_order: 0,
             rtt_last_ms: None,
@@ -1707,7 +2007,42 @@ mod tests {
 
         assert_eq!(size_of::<FlowKeyV4>(), 16);
         assert_eq!(size_of::<FlowKeyV6>(), 40);
+        assert_eq!(size_of::<ScaleFlowEntry>(), 40);
         assert!(size_of::<ScaleFlowEntry>() < size_of::<FlowEntry>());
+    }
+
+    #[test]
+    fn scale_flow_entry_tracks_compact_state_and_deltas() {
+        let time_base_ms = scale_base_ms(1.0);
+        let mut entry = ScaleFlowEntry::new(1.0, FlowProtocol::Tcp, time_base_ms);
+        entry.observe(
+            2.0,
+            time_base_ms,
+            FlowDirection::AtoB,
+            128,
+            Some(TcpFlags {
+                syn: true,
+                ack: false,
+                fin: false,
+                rst: false,
+            }),
+        );
+
+        let total = entry.total_bytes();
+        let mut marks = ScaleReportMarks::default();
+        assert_eq!(total.saturating_sub(marks.stats_total), 128);
+        assert_eq!(total.saturating_sub(marks.web_total), 128);
+        assert_eq!(entry.tcp_state(), Some(TcpState::SynSent));
+        assert_eq!(entry.client(), Some(FlowDirection::AtoB));
+        assert_eq!(entry.first_seen(time_base_ms), 1.0);
+        assert_eq!(entry.last_seen(time_base_ms), 2.0);
+
+        marks.stats_total = total;
+        marks.web_total = total;
+
+        let total = entry.total_bytes();
+        assert_eq!(total.saturating_sub(marks.stats_total), 0);
+        assert_eq!(total.saturating_sub(marks.web_total), 0);
     }
 
     #[test]

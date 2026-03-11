@@ -370,6 +370,9 @@ let pendingPackets = [];
 let pendingAlerts = [];
 let rafScheduled = false;
 
+const flowRowsByKey = new Map();
+const flowRowPool = [];
+
 const chartData = { labels: [], mbps: [], pps: [] };
 let chart = null;
 
@@ -543,36 +546,88 @@ function renderStatsTick(msg, renderTsMs) {
 // ======================================================================
 // Flow table
 // ======================================================================
+function flowKey(flow) {
+  return `${flow.protocol}|${flow.src_ip}|${flow.src_port}|${flow.dst_ip}|${flow.dst_port}`;
+}
+
+function createFlowRow() {
+  const tr = document.createElement('tr');
+  const cells = [];
+  for (let i = 0; i < 7; i++) {
+    const td = document.createElement('td');
+    tr.appendChild(td);
+    cells.push(td);
+  }
+  return { tr, cells };
+}
+
+function setCellText(td, value) {
+  const text = value == null ? '' : String(value);
+  if (td.textContent !== text) {
+    td.textContent = text;
+  }
+}
+
+function acquireFlowRow(key) {
+  let row = flowRowsByKey.get(key);
+  if (!row) {
+    row = flowRowPool.pop() || createFlowRow();
+    flowRowsByKey.set(key, row);
+  }
+  return row;
+}
+
+function clearFlowRows() {
+  for (const row of flowRowsByKey.values()) {
+    row.tr.remove();
+    flowRowPool.push(row);
+  }
+  flowRowsByKey.clear();
+}
+
+function renderFlowRow(row, rank, flow) {
+  const rate = flow.delta_mbps < 1
+    ? (flow.delta_mbps * 1000).toFixed(0) + ' Kbps'
+    : flow.delta_mbps.toFixed(2) + ' Mbps';
+
+  setCellText(row.cells[0], rank + 1);
+  setCellText(row.cells[1], flow.protocol);
+  setCellText(row.cells[2], `${flow.src_ip}:${flow.src_port}`);
+  setCellText(row.cells[3], `${flow.dst_ip}:${flow.dst_port}`);
+  setCellText(row.cells[4], rate);
+  setCellText(row.cells[5], formatBytes(flow.bytes_total));
+  setCellText(row.cells[6], flow.tcp_state || '');
+}
+
 function updateFlowTable(flows) {
   const tbody = document.getElementById('flowsBody');
   const empty = document.getElementById('flowsEmpty');
 
   if (!flows || flows.length === 0) {
     empty.style.display = '';
-    tbody.replaceChildren();
+    clearFlowRows();
     return;
   }
   empty.style.display = 'none';
 
-  const rows = [];
+  const activeKeys = new Set();
   for (let i = 0; i < flows.length; i++) {
     const f = flows[i];
-    const rate = f.delta_mbps < 1
-      ? (f.delta_mbps * 1000).toFixed(0) + ' Kbps'
-      : f.delta_mbps.toFixed(2) + ' Mbps';
-    const total = formatBytes(f.bytes_total);
-    const state = f.tcp_state || '';
-    const tr = document.createElement('tr');
-    tr.appendChild(cell(i + 1));
-    tr.appendChild(cell(f.protocol));
-    tr.appendChild(cell(`${f.src_ip}:${f.src_port}`));
-    tr.appendChild(cell(`${f.dst_ip}:${f.dst_port}`));
-    tr.appendChild(cell(rate));
-    tr.appendChild(cell(total));
-    tr.appendChild(cell(state));
-    rows.push(tr);
+    const key = flowKey(f);
+    activeKeys.add(key);
+
+    const row = acquireFlowRow(key);
+    renderFlowRow(row, i, f);
+    tbody.appendChild(row.tr);
   }
-  tbody.replaceChildren(...rows);
+
+  for (const [key, row] of flowRowsByKey.entries()) {
+    if (!activeKeys.has(key)) {
+      flowRowsByKey.delete(key);
+      row.tr.remove();
+      flowRowPool.push(row);
+    }
+  }
 }
 
 // ======================================================================
