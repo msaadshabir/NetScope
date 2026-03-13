@@ -58,6 +58,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux).
 | **[Anomaly Detection](docs/anomaly-detection.md)** | SYN flood and port scan detection                   |
 | **[Exports](docs/exports.md)**                     | Output formats (JSON, CSV, JSONL, pcap)             |
 | **[Performance](docs/performance.md)**             | Benchmarks and tuning checklist                     |
+| **[Perf Validation](docs/perf-validation.md)**     | Acceptance-run workflow for all perf targets        |
 | **[Troubleshooting](docs/troubleshooting.md)**     | Common issues and fixes                             |
 | **[Development](docs/development.md)**             | Repo layout, tests, extending protocols             |
 

@@ -60,6 +60,8 @@ header .status {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .perf-overlay {
@@ -71,6 +73,71 @@ header .status {
   font-size: 0.75rem;
   font-family: var(--mono);
   white-space: nowrap;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.control-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.control-select,
+.control-button {
+  background: var(--surface2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-family: var(--sans);
+}
+
+.control-select {
+  padding: 0.28rem 0.45rem;
+}
+
+.control-button {
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+}
+
+.control-button:hover,
+.control-select:hover {
+  border-color: var(--accent);
+}
+
+.control-button.paused {
+  background: rgba(210, 153, 34, 0.12);
+  color: var(--yellow);
+  border-color: rgba(210, 153, 34, 0.35);
+}
+
+@media (max-width: 900px) {
+  header {
+    align-items: flex-start;
+    gap: 0.75rem;
+  }
+
+  header .status {
+    justify-content: flex-start;
+  }
+
+  .controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
 }
 
 .dot {
@@ -240,6 +307,19 @@ tbody tr.selected { background: #1f3a5f; }
   <div class="status">
     <span class="dot disconnected" id="statusDot"></span>
     <span id="statusText">Connecting...</span>
+    <div class="controls">
+      <label class="control-group" for="updateRate">
+        <span class="control-label">Update</span>
+        <select id="updateRate" class="control-select">
+          <option value="1000">1x/s</option>
+          <option value="500">2x/s</option>
+          <option value="250">4x/s</option>
+          <option value="100">10x/s</option>
+          <option value="33">Live</option>
+        </select>
+      </label>
+      <button id="pauseBtn" class="control-button" type="button">Pause</button>
+    </div>
     <span class="perf-overlay" id="perfOverlay" style="display:none"></span>
   </div>
 </header>
@@ -343,18 +423,25 @@ tbody tr.selected { background: #1f3a5f; }
 // ======================================================================
 // State
 // ======================================================================
-const MAX_CHART_POINTS = 120;
+const perfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
+
+const MAX_CHART_POINTS = 240;
 const MAX_PACKETS = 500;
 const MAX_ALERTS  = 200;
 const MAX_LATENCY_SAMPLES = 1800;
+const MAX_PACKET_BATCH = 24;
+const MAX_ALERT_BATCH = 24;
 const PERF_PING_SAMPLES = 8;
 const PERF_PING_INTERVAL_MS = 10000;
+const CHART_SAMPLE_INTERVAL_MS = 250;
+const UPDATE_INTERVAL_STORAGE_KEY = 'netscope.updateIntervalMs';
+const DEFAULT_UPDATE_INTERVAL_MS = perfEnabled ? 33 : 1000;
+const ALLOWED_UPDATE_INTERVALS = [33, 100, 250, 500, 1000];
 
 let ws = null;
 let selectedPacketId = null;
 let alertCount = 0;
 
-const perfEnabled = new URLSearchParams(window.location.search).get('perf') === '1';
 let clockOffsetMs = 0;
 let pingSentAtMs = 0;
 let pingSampleCount = 0;
@@ -369,9 +456,16 @@ let statsDirty = false;
 let pendingPackets = [];
 let pendingAlerts = [];
 let rafScheduled = false;
+let renderTimer = null;
+let lastRenderAtMs = 0;
+let lastChartPointAtMs = 0;
+let dashboardPaused = false;
+let updateIntervalMs = loadUpdateIntervalMs();
 
-const flowRowsByKey = new Map();
-const flowRowPool = [];
+const flowRows = [];
+
+const recentPacketIds = new Set();
+const recentPacketQueue = [];
 
 const chartData = { labels: [], mbps: [], pps: [] };
 let chart = null;
@@ -379,16 +473,85 @@ let chart = null;
 // ======================================================================
 // WebSocket
 // ======================================================================
+function resetLiveStreamTracking() {
+  lastFrameSeq = null;
+  droppedFrames = 0;
+  recentPacketIds.clear();
+  recentPacketQueue.length = 0;
+}
+
+function loadUpdateIntervalMs() {
+  try {
+    const stored = Number(window.localStorage.getItem(UPDATE_INTERVAL_STORAGE_KEY));
+    if (ALLOWED_UPDATE_INTERVALS.includes(stored)) {
+      return stored;
+    }
+  } catch (_) {}
+  return DEFAULT_UPDATE_INTERVAL_MS;
+}
+
+function saveUpdateIntervalMs() {
+  try {
+    window.localStorage.setItem(UPDATE_INTERVAL_STORAGE_KEY, String(updateIntervalMs));
+  } catch (_) {}
+}
+
+function syncControls() {
+  const select = document.getElementById('updateRate');
+  const pauseBtn = document.getElementById('pauseBtn');
+  if (select) {
+    select.value = String(updateIntervalMs);
+  }
+  if (pauseBtn) {
+    pauseBtn.textContent = dashboardPaused ? 'Resume' : 'Pause';
+    pauseBtn.classList.toggle('paused', dashboardPaused);
+  }
+}
+
+function setUpdateIntervalMs(value) {
+  const next = Number(value);
+  if (!ALLOWED_UPDATE_INTERVALS.includes(next)) {
+    return;
+  }
+  updateIntervalMs = next;
+  saveUpdateIntervalMs();
+  if (renderTimer) {
+    clearTimeout(renderTimer);
+    renderTimer = null;
+  }
+  syncControls();
+  scheduleRender(true);
+}
+
+function togglePause() {
+  dashboardPaused = !dashboardPaused;
+  if (!dashboardPaused) {
+    scheduleRender(true);
+  }
+  syncControls();
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${proto}//${location.host}/ws`);
 
   ws.onopen = () => {
+    resetLiveStreamTracking();
+    pendingPackets = [];
+    pendingAlerts = [];
+    statsDirty = false;
+    lastRenderAtMs = 0;
+    lastChartPointAtMs = 0;
+    if (renderTimer) {
+      clearTimeout(renderTimer);
+      renderTimer = null;
+    }
     document.getElementById('statusDot').className = 'dot connected';
     document.getElementById('statusText').textContent = 'Connected';
   };
 
   ws.onclose = () => {
+    resetLiveStreamTracking();
     document.getElementById('statusDot').className = 'dot disconnected';
     document.getElementById('statusText').textContent = 'Disconnected';
     stopPerfPings();
@@ -401,6 +564,7 @@ function connect() {
     const msg = JSON.parse(event.data);
     switch (msg.type) {
       case 'hello':
+        resetLiveStreamTracking();
         document.getElementById('statusText').textContent =
           `Connected (v${msg.version})`;
         if (perfEnabled) {
@@ -447,6 +611,18 @@ function handleStatsTick(msg) {
 }
 
 function handleFrame(msg) {
+  if (typeof msg.frame_seq === 'number') {
+    if (lastFrameSeq !== null) {
+      if (msg.frame_seq <= lastFrameSeq) {
+        return;
+      }
+      if (msg.frame_seq > lastFrameSeq + 1) {
+        droppedFrames += (msg.frame_seq - lastFrameSeq - 1);
+      }
+    }
+    lastFrameSeq = msg.frame_seq;
+  }
+
   if (msg.tick) {
     handleStatsTick(msg.tick);
   }
@@ -468,16 +644,42 @@ function handleFrame(msg) {
   scheduleRender();
 }
 
-function scheduleRender() {
-  if (rafScheduled) {
+function scheduleRender(force) {
+  if (dashboardPaused && !force) {
     return;
   }
+  const hasPending = force || statsDirty || pendingPackets.length > 0 || pendingAlerts.length > 0;
+  if (!hasPending) {
+    return;
+  }
+  if (rafScheduled || renderTimer) {
+    return;
+  }
+
+  const now = performance.now();
+  const waitMs = force ? 0 : Math.max(0, updateIntervalMs - (now - lastRenderAtMs));
+  if (waitMs > 0) {
+    renderTimer = setTimeout(() => {
+      renderTimer = null;
+      if (dashboardPaused) {
+        return;
+      }
+      rafScheduled = true;
+      requestAnimationFrame(renderFrame);
+    }, waitMs);
+    return;
+  }
+
   rafScheduled = true;
   requestAnimationFrame(renderFrame);
 }
 
 function renderFrame() {
   rafScheduled = false;
+  if (dashboardPaused) {
+    return;
+  }
+  lastRenderAtMs = performance.now();
   const renderTsMs = Date.now();
 
   if (statsDirty && latestStatsTick) {
@@ -501,29 +703,25 @@ function renderStatsTick(msg, renderTsMs) {
   document.getElementById('cardFlows').textContent =
     msg.active_flows.toLocaleString();
 
-  const label = new Date(renderTsMs).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  });
-  chartData.labels.push(label);
-  chartData.mbps.push(msg.mbps);
-  chartData.pps.push(msg.pps);
-  if (chartData.labels.length > MAX_CHART_POINTS) {
-    chartData.labels.shift();
-    chartData.mbps.shift();
-    chartData.pps.shift();
+  if (chartData.labels.length === 0 || renderTsMs - lastChartPointAtMs >= CHART_SAMPLE_INTERVAL_MS) {
+    const label = new Date(renderTsMs).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    chartData.labels.push(chartData.labels.length % 4 === 0 ? label : '');
+    chartData.mbps.push(msg.mbps);
+    chartData.pps.push(msg.pps);
+    if (chartData.labels.length > MAX_CHART_POINTS) {
+      chartData.labels.shift();
+      chartData.mbps.shift();
+      chartData.pps.shift();
+    }
+    lastChartPointAtMs = renderTsMs;
+    chart.update('none');
   }
-  chart.update('none');
 
   updateFlowTable(msg.top_flows);
-
-  if (typeof msg.frame_seq === 'number') {
-    if (lastFrameSeq !== null && msg.frame_seq > lastFrameSeq + 1) {
-      droppedFrames += (msg.frame_seq - lastFrameSeq - 1);
-    }
-    lastFrameSeq = msg.frame_seq;
-  }
 
   frameRenderTimes.push(renderTsMs);
   while (frameRenderTimes.length > 0 && renderTsMs - frameRenderTimes[0] > 60000) {
@@ -546,10 +744,6 @@ function renderStatsTick(msg, renderTsMs) {
 // ======================================================================
 // Flow table
 // ======================================================================
-function flowKey(flow) {
-  return `${flow.protocol}|${flow.src_ip}|${flow.src_port}|${flow.dst_ip}|${flow.dst_port}`;
-}
-
 function createFlowRow() {
   const tr = document.createElement('tr');
   const cells = [];
@@ -568,21 +762,13 @@ function setCellText(td, value) {
   }
 }
 
-function acquireFlowRow(key) {
-  let row = flowRowsByKey.get(key);
-  if (!row) {
-    row = flowRowPool.pop() || createFlowRow();
-    flowRowsByKey.set(key, row);
-  }
-  return row;
-}
-
 function clearFlowRows() {
-  for (const row of flowRowsByKey.values()) {
-    row.tr.remove();
-    flowRowPool.push(row);
+  for (let i = 0; i < flowRows.length; i++) {
+    const row = flowRows[i];
+    if (row) {
+      row.tr.style.display = 'none';
+    }
   }
-  flowRowsByKey.clear();
 }
 
 function renderFlowRow(row, rank, flow) {
@@ -610,22 +796,24 @@ function updateFlowTable(flows) {
   }
   empty.style.display = 'none';
 
-  const activeKeys = new Set();
-  for (let i = 0; i < flows.length; i++) {
-    const f = flows[i];
-    const key = flowKey(f);
-    activeKeys.add(key);
-
-    const row = acquireFlowRow(key);
-    renderFlowRow(row, i, f);
+  while (flowRows.length < flows.length) {
+    const row = createFlowRow();
     tbody.appendChild(row.tr);
+    flowRows.push(row);
   }
 
-  for (const [key, row] of flowRowsByKey.entries()) {
-    if (!activeKeys.has(key)) {
-      flowRowsByKey.delete(key);
-      row.tr.remove();
-      flowRowPool.push(row);
+  for (let i = 0; i < flows.length; i++) {
+    const f = flows[i];
+    let row = flowRows[i];
+    if (!row) continue;
+    row.tr.style.display = '';
+    renderFlowRow(row, i, f);
+  }
+
+  for (let i = flows.length; i < flowRows.length; i++) {
+    const row = flowRows[i];
+    if (row) {
+      row.tr.style.display = 'none';
     }
   }
 }
@@ -634,6 +822,14 @@ function updateFlowTable(flows) {
 // Packet list
 // ======================================================================
 function appendPacketRow(pkt) {
+  if (typeof pkt.id === 'number') {
+    if (recentPacketIds.has(pkt.id)) {
+      return;
+    }
+    recentPacketIds.add(pkt.id);
+    recentPacketQueue.push(pkt.id);
+  }
+
   const tbody = document.getElementById('packetsBody');
   const empty = document.getElementById('packetsEmpty');
   empty.style.display = 'none';
@@ -661,6 +857,12 @@ function appendPacketRow(pkt) {
   // Trim excess
   while (tbody.children.length > MAX_PACKETS) {
     const removed = tbody.lastChild;
+    if (removed) {
+      const removedId = Number(removed.dataset.id);
+      if (Number.isFinite(removedId)) {
+        recentPacketIds.delete(removedId);
+      }
+    }
     if (removed && Number(removed.dataset.id) === selectedPacketId) {
       selectedPacketId = null;
       document.getElementById('detailEmpty').textContent = 'Select a packet to inspect';
@@ -669,6 +871,7 @@ function appendPacketRow(pkt) {
     }
     tbody.removeChild(removed);
   }
+
 }
 
 function flushPendingPackets() {
@@ -677,8 +880,19 @@ function flushPendingPackets() {
   }
   const batch = pendingPackets;
   pendingPackets = [];
-  for (let i = 0; i < batch.length; i++) {
+  const start = Math.max(0, batch.length - MAX_PACKET_BATCH);
+  for (let i = start; i < batch.length; i++) {
     appendPacketRow(batch[i]);
+  }
+
+  while (recentPacketQueue.length > MAX_PACKETS * 2) {
+    const evicted = recentPacketQueue.shift();
+    if (evicted == null) {
+      continue;
+    }
+    if (!document.querySelector(`#packetsBody tr[data-id="${evicted}"]`)) {
+      recentPacketIds.delete(evicted);
+    }
   }
 }
 
@@ -762,7 +976,8 @@ function flushPendingAlerts() {
   }
   const batch = pendingAlerts;
   pendingAlerts = [];
-  for (let i = 0; i < batch.length; i++) {
+  const start = Math.max(0, batch.length - MAX_ALERT_BATCH);
+  for (let i = start; i < batch.length; i++) {
     appendAlertRow(batch[i]);
   }
 }
@@ -988,6 +1203,11 @@ document.addEventListener('DOMContentLoaded', () => {
   if (perfEnabled) {
     document.getElementById('perfOverlay').style.display = '';
   }
+  document.getElementById('updateRate').addEventListener('change', (event) => {
+    setUpdateIntervalMs(Number(event.target.value));
+  });
+  document.getElementById('pauseBtn').addEventListener('click', togglePause);
+  syncControls();
   initChart();
   connect();
 });

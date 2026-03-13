@@ -266,6 +266,8 @@ pub enum TcpState {
 struct ScaleFlowEntry {
     bytes_a_to_b: u64,
     bytes_b_to_a: u64,
+    stats_report_total: u64,
+    web_report_total: u64,
     first_seen_ms: u32,
     last_seen_ms: u32,
     packets_a_to_b: u32,
@@ -275,12 +277,6 @@ struct ScaleFlowEntry {
     tcp_state: u8,
     client: u8,
     _pad: [u8; 2],
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct ScaleReportMarks {
-    stats_total: u64,
-    web_total: u64,
 }
 
 const SCALE_TCP_STATE_NONE: u8 = 7;
@@ -340,6 +336,8 @@ impl ScaleFlowEntry {
         ScaleFlowEntry {
             bytes_a_to_b: 0,
             bytes_b_to_a: 0,
+            stats_report_total: 0,
+            web_report_total: 0,
             first_seen_ms,
             last_seen_ms: first_seen_ms,
             packets_a_to_b: 0,
@@ -391,6 +389,26 @@ impl ScaleFlowEntry {
     #[inline]
     fn total_packets(&self) -> u64 {
         self.packets_a_to_b as u64 + self.packets_b_to_a as u64
+    }
+
+    #[inline]
+    fn stats_delta(&self) -> u64 {
+        self.total_bytes().saturating_sub(self.stats_report_total)
+    }
+
+    #[inline]
+    fn web_delta(&self) -> u64 {
+        self.total_bytes().saturating_sub(self.web_report_total)
+    }
+
+    #[inline]
+    fn mark_stats_reported(&mut self) {
+        self.stats_report_total = self.total_bytes();
+    }
+
+    #[inline]
+    fn mark_web_reported(&mut self) {
+        self.web_report_total = self.total_bytes();
     }
 
     #[inline]
@@ -756,8 +774,6 @@ enum FlowStore {
         time_base_ms: u64,
         flows_v4: AHashMap<FlowKeyV4, ScaleFlowEntry>,
         flows_v6: AHashMap<FlowKeyV6, ScaleFlowEntry>,
-        reports_v4: AHashMap<FlowKeyV4, ScaleReportMarks>,
-        reports_v6: AHashMap<FlowKeyV6, ScaleReportMarks>,
     },
 }
 
@@ -799,8 +815,6 @@ impl FlowTracker {
                 time_base_ms: 0,
                 flows_v4: AHashMap::with_capacity(initial_capacity),
                 flows_v6: AHashMap::with_capacity(initial_capacity / 8),
-                reports_v4: AHashMap::new(),
-                reports_v6: AHashMap::new(),
             }
         } else {
             FlowStore::Full(AHashMap::with_capacity(initial_capacity))
@@ -849,7 +863,6 @@ impl FlowTracker {
             FlowStore::Scale {
                 time_base_ms,
                 flows_v4,
-                reports_v4,
                 ..
             } => {
                 if *time_base_ms == 0 {
@@ -866,7 +879,6 @@ impl FlowTracker {
                     flows_v4
                         .entry(key)
                         .or_insert_with(|| ScaleFlowEntry::new(0.0, FlowProtocol::Tcp, base));
-                    reports_v4.entry(key).or_default();
                 }
             }
             FlowStore::Full(flows) => {
@@ -973,8 +985,6 @@ impl FlowTracker {
                 time_base_ms,
                 flows_v4,
                 flows_v6,
-                reports_v4,
-                reports_v6,
             } => {
                 if *time_base_ms == 0 {
                     *time_base_ms = scale_base_ms(ts);
@@ -989,7 +999,6 @@ impl FlowTracker {
                             .entry(key)
                             .or_insert_with(|| ScaleFlowEntry::new(ts, protocol, base));
                         entry.observe(ts, base, direction, wire_len, flags);
-                        reports_v4.entry(key).or_default();
                     }
                     ParsedFlowIps::V6(src_ip, dst_ip) => {
                         let (key, direction) =
@@ -998,7 +1007,6 @@ impl FlowTracker {
                             .entry(key)
                             .or_insert_with(|| ScaleFlowEntry::new(ts, protocol, base));
                         entry.observe(ts, base, direction, wire_len, flags);
-                        reports_v6.entry(key).or_default();
                     }
                 }
             }
@@ -1042,8 +1050,6 @@ impl FlowTracker {
                 time_base_ms,
                 flows_v4,
                 flows_v6,
-                reports_v4,
-                reports_v6,
             } => {
                 if self.timeout_secs > 0.0 {
                     flows_v4.retain(|_, entry| {
@@ -1053,7 +1059,6 @@ impl FlowTracker {
                         }
                         keep
                     });
-                    reports_v4.retain(|key, _| flows_v4.contains_key(key));
                     flows_v6.retain(|_, entry| {
                         let keep = now - entry.last_seen(*time_base_ms) <= self.timeout_secs;
                         if !keep {
@@ -1061,7 +1066,6 @@ impl FlowTracker {
                         }
                         keep
                     });
-                    reports_v6.retain(|key, _| flows_v6.contains_key(key));
                 }
 
                 let total_len = flows_v4.len() + flows_v6.len();
@@ -1083,14 +1087,8 @@ impl FlowTracker {
                     let excess = total_len - self.max_flows;
                     for (key, _) in entries.into_iter().take(excess) {
                         let did_remove = match key {
-                            CompactFlowKey::V4(k) => {
-                                reports_v4.remove(&k);
-                                flows_v4.remove(&k).is_some()
-                            }
-                            CompactFlowKey::V6(k) => {
-                                reports_v6.remove(&k);
-                                flows_v6.remove(&k).is_some()
-                            }
+                            CompactFlowKey::V4(k) => flows_v4.remove(&k).is_some(),
+                            CompactFlowKey::V6(k) => flows_v6.remove(&k).is_some(),
                         };
                         if did_remove {
                             removed += 1;
@@ -1142,17 +1140,11 @@ impl FlowTracker {
                 deltas
             }
             FlowStore::Scale {
-                flows_v4,
-                flows_v6,
-                reports_v4,
-                reports_v6,
-                ..
+                flows_v4, flows_v6, ..
             } => {
                 let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
                 deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
-                    let total = entry.total_bytes();
-                    let delta =
-                        total.saturating_sub(reports_v4.get(key).map_or(0, |m| m.stats_total));
+                    let delta = entry.stats_delta();
                     if delta > 0 {
                         Some((CompactFlowKey::V4(*key), delta))
                     } else {
@@ -1160,9 +1152,7 @@ impl FlowTracker {
                     }
                 }));
                 deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
-                    let total = entry.total_bytes();
-                    let delta =
-                        total.saturating_sub(reports_v6.get(key).map_or(0, |m| m.stats_total));
+                    let delta = entry.stats_delta();
                     if delta > 0 {
                         Some((CompactFlowKey::V6(*key), delta))
                     } else {
@@ -1181,14 +1171,12 @@ impl FlowTracker {
                     match key {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
-                                let total = entry.total_bytes();
-                                reports_v4.entry(*k).or_default().stats_total = total;
+                                entry.mark_stats_reported();
                             }
                         }
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
-                                let total = entry.total_bytes();
-                                reports_v6.entry(*k).or_default().stats_total = total;
+                                entry.mark_stats_reported();
                             }
                         }
                     }
@@ -1255,14 +1243,10 @@ impl FlowTracker {
                 time_base_ms,
                 flows_v4,
                 flows_v6,
-                reports_v4,
-                reports_v6,
             } => {
                 let mut deltas: Vec<(CompactFlowKey, u64)> = Vec::new();
                 deltas.extend(flows_v4.iter().filter_map(|(key, entry)| {
-                    let total = entry.total_bytes();
-                    let delta =
-                        total.saturating_sub(reports_v4.get(key).map_or(0, |m| m.web_total));
+                    let delta = entry.web_delta();
                     if delta > 0 {
                         Some((CompactFlowKey::V4(*key), delta))
                     } else {
@@ -1270,9 +1254,7 @@ impl FlowTracker {
                     }
                 }));
                 deltas.extend(flows_v6.iter().filter_map(|(key, entry)| {
-                    let total = entry.total_bytes();
-                    let delta =
-                        total.saturating_sub(reports_v6.get(key).map_or(0, |m| m.web_total));
+                    let delta = entry.web_delta();
                     if delta > 0 {
                         Some((CompactFlowKey::V6(*key), delta))
                     } else {
@@ -1292,8 +1274,7 @@ impl FlowTracker {
                     match compact_key {
                         CompactFlowKey::V4(key) => {
                             if let Some(entry) = flows_v4.get_mut(&key) {
-                                let total = entry.total_bytes();
-                                reports_v4.entry(key).or_default().web_total = total;
+                                entry.mark_web_reported();
                                 let flow_key = CompactFlowKey::V4(key).to_flow_key();
                                 let snap =
                                     FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms);
@@ -1308,8 +1289,7 @@ impl FlowTracker {
                         }
                         CompactFlowKey::V6(key) => {
                             if let Some(entry) = flows_v6.get_mut(&key) {
-                                let total = entry.total_bytes();
-                                reports_v6.entry(key).or_default().web_total = total;
+                                entry.mark_web_reported();
                                 let flow_key = CompactFlowKey::V6(key).to_flow_key();
                                 let snap =
                                     FlowSnapshot::from_scale_entry(&flow_key, entry, *time_base_ms);
@@ -1421,8 +1401,6 @@ impl FlowTracker {
                 time_base_ms,
                 flows_v4,
                 flows_v6,
-                reports_v4,
-                reports_v6,
             } => {
                 let mut seen = AHashSet::with_capacity(keys.len());
                 let mut out: Vec<(CompactFlowKey, u64, FlowSnapshot)> =
@@ -1436,9 +1414,7 @@ impl FlowTracker {
                     match compact_key {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
-                                let total = entry.total_bytes();
-                                let delta = total
-                                    .saturating_sub(reports_v4.get(k).map_or(0, |m| m.web_total));
+                                let delta = entry.web_delta();
                                 if delta > 0 {
                                     let flow_key = CompactFlowKey::V4(*k).to_flow_key();
                                     out.push((
@@ -1455,9 +1431,7 @@ impl FlowTracker {
                         }
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
-                                let total = entry.total_bytes();
-                                let delta = total
-                                    .saturating_sub(reports_v6.get(k).map_or(0, |m| m.web_total));
+                                let delta = entry.web_delta();
                                 if delta > 0 {
                                     let flow_key = CompactFlowKey::V6(*k).to_flow_key();
                                     out.push((
@@ -1482,14 +1456,12 @@ impl FlowTracker {
                     match compact_key {
                         CompactFlowKey::V4(k) => {
                             if let Some(entry) = flows_v4.get_mut(k) {
-                                let total = entry.total_bytes();
-                                reports_v4.entry(*k).or_default().web_total = total;
+                                entry.mark_web_reported();
                             }
                         }
                         CompactFlowKey::V6(k) => {
                             if let Some(entry) = flows_v6.get_mut(k) {
-                                let total = entry.total_bytes();
-                                reports_v6.entry(*k).or_default().web_total = total;
+                                entry.mark_web_reported();
                             }
                         }
                     }
@@ -2007,7 +1979,7 @@ mod tests {
 
         assert_eq!(size_of::<FlowKeyV4>(), 16);
         assert_eq!(size_of::<FlowKeyV6>(), 40);
-        assert_eq!(size_of::<ScaleFlowEntry>(), 40);
+        assert_eq!(size_of::<ScaleFlowEntry>(), 56);
         assert!(size_of::<ScaleFlowEntry>() < size_of::<FlowEntry>());
     }
 
@@ -2029,20 +2001,19 @@ mod tests {
         );
 
         let total = entry.total_bytes();
-        let mut marks = ScaleReportMarks::default();
-        assert_eq!(total.saturating_sub(marks.stats_total), 128);
-        assert_eq!(total.saturating_sub(marks.web_total), 128);
+        assert_eq!(entry.stats_delta(), 128);
+        assert_eq!(entry.web_delta(), 128);
         assert_eq!(entry.tcp_state(), Some(TcpState::SynSent));
         assert_eq!(entry.client(), Some(FlowDirection::AtoB));
         assert_eq!(entry.first_seen(time_base_ms), 1.0);
         assert_eq!(entry.last_seen(time_base_ms), 2.0);
 
-        marks.stats_total = total;
-        marks.web_total = total;
+        entry.mark_stats_reported();
+        entry.mark_web_reported();
 
-        let total = entry.total_bytes();
-        assert_eq!(total.saturating_sub(marks.stats_total), 0);
-        assert_eq!(total.saturating_sub(marks.web_total), 0);
+        assert_eq!(entry.total_bytes(), total);
+        assert_eq!(entry.stats_delta(), 0);
+        assert_eq!(entry.web_delta(), 0);
     }
 
     #[test]
