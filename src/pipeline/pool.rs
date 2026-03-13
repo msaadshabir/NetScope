@@ -1,4 +1,4 @@
-use crossbeam_channel::{Receiver, Sender, bounded};
+use crossbeam_channel::{bounded, Receiver, Sender};
 
 #[derive(Debug)]
 pub struct PacketBufPool {

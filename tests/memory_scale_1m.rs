@@ -1,4 +1,5 @@
 use netscope::flow::FlowTracker;
+use netscope::memory;
 
 #[test]
 #[ignore = "long-running memory validation for performance plan"]
@@ -11,24 +12,10 @@ fn memory_scale_1m() {
 
     assert_eq!(tracker.len(), count);
 
-    let rss_kb = current_rss_kb().expect("failed to read RSS with ps");
+    let rss_kb = memory::current_rss_kb().expect("failed to read current RSS");
     assert!(
         rss_kb < 500 * 1024,
         "rss budget exceeded: {:.2} MB",
         rss_kb as f64 / 1024.0
     );
-}
-
-fn current_rss_kb() -> Option<u64> {
-    let pid = std::process::id().to_string();
-    let output = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8(output.stdout).ok()?;
-    text.trim().parse::<u64>().ok()
 }

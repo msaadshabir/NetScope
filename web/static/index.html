@@ -433,13 +433,16 @@ const MAX_PACKET_BATCH = 24;
 const MAX_ALERT_BATCH = 24;
 const PERF_PING_SAMPLES = 8;
 const PERF_PING_INTERVAL_MS = 10000;
+const PERF_OVERLAY_UPDATE_INTERVAL_MS = 250;
 const CHART_SAMPLE_INTERVAL_MS = 250;
+const FLOW_TABLE_UPDATE_INTERVAL_MS = 0;
 const UPDATE_INTERVAL_STORAGE_KEY = 'netscope.updateIntervalMs';
 const DEFAULT_UPDATE_INTERVAL_MS = perfEnabled ? 33 : 1000;
 const ALLOWED_UPDATE_INTERVALS = [33, 100, 250, 500, 1000];
 
 let ws = null;
 let selectedPacketId = null;
+let selectedPacketRow = null;
 let alertCount = 0;
 
 let clockOffsetMs = 0;
@@ -450,19 +453,26 @@ let latencySamples = [];
 let frameRenderTimes = [];
 let droppedFrames = 0;
 let lastFrameSeq = null;
+let lastPerfOverlayUpdateMs = 0;
+let cachedLatencyP50 = Number.NaN;
+let cachedLatencyP95 = Number.NaN;
+let cachedLatencyP99 = Number.NaN;
+let lastPerfOverlayText = '';
 
 let latestStatsTick = null;
 let statsDirty = false;
 let pendingPackets = [];
 let pendingAlerts = [];
 let rafScheduled = false;
-let renderTimer = null;
+let forceRenderPending = false;
 let lastRenderAtMs = 0;
 let lastChartPointAtMs = 0;
+let lastFlowTableUpdateAtMs = 0;
 let dashboardPaused = false;
 let updateIntervalMs = loadUpdateIntervalMs();
 
 const flowRows = [];
+let lastFlowTableSignature = '';
 
 const recentPacketIds = new Set();
 const recentPacketQueue = [];
@@ -470,17 +480,25 @@ const recentPacketQueue = [];
 const chartData = { labels: [], mbps: [], pps: [] };
 let chart = null;
 
+const ui = {};
+
 // ======================================================================
 // WebSocket
 // ======================================================================
 function resetLiveStreamTracking() {
   lastFrameSeq = null;
   droppedFrames = 0;
+  lastFlowTableSignature = '';
+  lastFlowTableUpdateAtMs = 0;
+  selectedPacketRow = null;
   recentPacketIds.clear();
   recentPacketQueue.length = 0;
 }
 
 function loadUpdateIntervalMs() {
+  if (perfEnabled) {
+    return DEFAULT_UPDATE_INTERVAL_MS;
+  }
   try {
     const stored = Number(window.localStorage.getItem(UPDATE_INTERVAL_STORAGE_KEY));
     if (ALLOWED_UPDATE_INTERVALS.includes(stored)) {
@@ -491,16 +509,20 @@ function loadUpdateIntervalMs() {
 }
 
 function saveUpdateIntervalMs() {
+  if (perfEnabled) {
+    return;
+  }
   try {
     window.localStorage.setItem(UPDATE_INTERVAL_STORAGE_KEY, String(updateIntervalMs));
   } catch (_) {}
 }
 
 function syncControls() {
-  const select = document.getElementById('updateRate');
-  const pauseBtn = document.getElementById('pauseBtn');
+  const select = ui.updateRate;
+  const pauseBtn = ui.pauseBtn;
   if (select) {
     select.value = String(updateIntervalMs);
+    select.disabled = perfEnabled;
   }
   if (pauseBtn) {
     pauseBtn.textContent = dashboardPaused ? 'Resume' : 'Pause';
@@ -513,12 +535,14 @@ function setUpdateIntervalMs(value) {
   if (!ALLOWED_UPDATE_INTERVALS.includes(next)) {
     return;
   }
+  if (perfEnabled) {
+    updateIntervalMs = DEFAULT_UPDATE_INTERVAL_MS;
+    syncControls();
+    return;
+  }
   updateIntervalMs = next;
   saveUpdateIntervalMs();
-  if (renderTimer) {
-    clearTimeout(renderTimer);
-    renderTimer = null;
-  }
+  forceRenderPending = true;
   syncControls();
   scheduleRender(true);
 }
@@ -540,20 +564,25 @@ function connect() {
     pendingPackets = [];
     pendingAlerts = [];
     statsDirty = false;
+    forceRenderPending = false;
     lastRenderAtMs = 0;
     lastChartPointAtMs = 0;
-    if (renderTimer) {
-      clearTimeout(renderTimer);
-      renderTimer = null;
+    if (ui.statusDot) {
+      ui.statusDot.className = 'dot connected';
     }
-    document.getElementById('statusDot').className = 'dot connected';
-    document.getElementById('statusText').textContent = 'Connected';
+    if (ui.statusText) {
+      ui.statusText.textContent = 'Connected';
+    }
   };
 
   ws.onclose = () => {
     resetLiveStreamTracking();
-    document.getElementById('statusDot').className = 'dot disconnected';
-    document.getElementById('statusText').textContent = 'Disconnected';
+    if (ui.statusDot) {
+      ui.statusDot.className = 'dot disconnected';
+    }
+    if (ui.statusText) {
+      ui.statusText.textContent = 'Disconnected';
+    }
     stopPerfPings();
     setTimeout(connect, 2000);
   };
@@ -565,8 +594,9 @@ function connect() {
     switch (msg.type) {
       case 'hello':
         resetLiveStreamTracking();
-        document.getElementById('statusText').textContent =
-          `Connected (v${msg.version})`;
+        if (ui.statusText) {
+          ui.statusText.textContent = `Connected (v${msg.version})`;
+        }
         if (perfEnabled) {
           startPerfPings();
         }
@@ -648,25 +678,14 @@ function scheduleRender(force) {
   if (dashboardPaused && !force) {
     return;
   }
-  const hasPending = force || statsDirty || pendingPackets.length > 0 || pendingAlerts.length > 0;
+  if (force) {
+    forceRenderPending = true;
+  }
+  const hasPending = forceRenderPending || statsDirty || pendingPackets.length > 0 || pendingAlerts.length > 0;
   if (!hasPending) {
     return;
   }
-  if (rafScheduled || renderTimer) {
-    return;
-  }
-
-  const now = performance.now();
-  const waitMs = force ? 0 : Math.max(0, updateIntervalMs - (now - lastRenderAtMs));
-  if (waitMs > 0) {
-    renderTimer = setTimeout(() => {
-      renderTimer = null;
-      if (dashboardPaused) {
-        return;
-      }
-      rafScheduled = true;
-      requestAnimationFrame(renderFrame);
-    }, waitMs);
+  if (rafScheduled) {
     return;
   }
 
@@ -674,12 +693,23 @@ function scheduleRender(force) {
   requestAnimationFrame(renderFrame);
 }
 
-function renderFrame() {
+function renderFrame(frameNow) {
   rafScheduled = false;
   if (dashboardPaused) {
     return;
   }
-  lastRenderAtMs = performance.now();
+  const hasPending = forceRenderPending || statsDirty || pendingPackets.length > 0 || pendingAlerts.length > 0;
+  if (!hasPending) {
+    return;
+  }
+
+  if (!forceRenderPending && lastRenderAtMs > 0 && frameNow - lastRenderAtMs < updateIntervalMs) {
+    scheduleRender();
+    return;
+  }
+
+  lastRenderAtMs = frameNow;
+  forceRenderPending = false;
   const renderTsMs = Date.now();
 
   if (statsDirty && latestStatsTick) {
@@ -696,12 +726,19 @@ function renderFrame() {
 }
 
 function renderStatsTick(msg, renderTsMs) {
-  document.getElementById('cardMbps').textContent =
-    msg.mbps < 1 ? msg.mbps.toFixed(3) : msg.mbps.toFixed(2);
-  document.getElementById('cardPps').textContent =
-    msg.pps < 10 ? msg.pps.toFixed(1) : Math.round(msg.pps).toLocaleString();
-  document.getElementById('cardFlows').textContent =
-    msg.active_flows.toLocaleString();
+  const mbpsText = msg.mbps < 1 ? msg.mbps.toFixed(3) : msg.mbps.toFixed(2);
+  const ppsText = msg.pps < 10 ? msg.pps.toFixed(1) : Math.round(msg.pps).toLocaleString();
+  const flowsText = msg.active_flows.toLocaleString();
+
+  if (ui.cardMbps && ui.cardMbps.textContent !== mbpsText) {
+    ui.cardMbps.textContent = mbpsText;
+  }
+  if (ui.cardPps && ui.cardPps.textContent !== ppsText) {
+    ui.cardPps.textContent = ppsText;
+  }
+  if (ui.cardFlows && ui.cardFlows.textContent !== flowsText) {
+    ui.cardFlows.textContent = flowsText;
+  }
 
   if (chartData.labels.length === 0 || renderTsMs - lastChartPointAtMs >= CHART_SAMPLE_INTERVAL_MS) {
     const label = new Date(renderTsMs).toLocaleTimeString([], {
@@ -721,7 +758,7 @@ function renderStatsTick(msg, renderTsMs) {
     chart.update('none');
   }
 
-  updateFlowTable(msg.top_flows);
+  updateFlowTable(msg.top_flows, renderTsMs);
 
   frameRenderTimes.push(renderTsMs);
   while (frameRenderTimes.length > 0 && renderTsMs - frameRenderTimes[0] > 60000) {
@@ -737,7 +774,7 @@ function renderStatsTick(msg, renderTsMs) {
         latencySamples.shift();
       }
     }
-    updatePerfOverlay();
+    updatePerfOverlay(renderTsMs);
   }
 }
 
@@ -752,7 +789,7 @@ function createFlowRow() {
     tr.appendChild(td);
     cells.push(td);
   }
-  return { tr, cells };
+  return { tr, cells, signature: '' };
 }
 
 function setCellText(td, value) {
@@ -767,14 +804,43 @@ function clearFlowRows() {
     const row = flowRows[i];
     if (row) {
       row.tr.style.display = 'none';
+      row.signature = '';
     }
   }
 }
 
+function formatFlowRate(deltaMbps) {
+  return deltaMbps < 1
+    ? (deltaMbps * 1000).toFixed(0) + ' Kbps'
+    : deltaMbps.toFixed(2) + ' Mbps';
+}
+
+function flowRowSignature(flow) {
+  return [
+    flow.protocol,
+    flow.src_ip,
+    flow.src_port,
+    flow.dst_ip,
+    flow.dst_port,
+    formatFlowRate(flow.delta_mbps),
+    formatBytes(flow.bytes_total),
+    flow.tcp_state || ''
+  ].join('|');
+}
+
+function flowTableSignature(flows) {
+  if (!flows || flows.length === 0) {
+    return '';
+  }
+  const parts = new Array(flows.length);
+  for (let i = 0; i < flows.length; i++) {
+    parts[i] = flowRowSignature(flows[i]);
+  }
+  return parts.join('\n');
+}
+
 function renderFlowRow(row, rank, flow) {
-  const rate = flow.delta_mbps < 1
-    ? (flow.delta_mbps * 1000).toFixed(0) + ' Kbps'
-    : flow.delta_mbps.toFixed(2) + ' Mbps';
+  const rate = formatFlowRate(flow.delta_mbps);
 
   setCellText(row.cells[0], rank + 1);
   setCellText(row.cells[1], flow.protocol);
@@ -785,15 +851,35 @@ function renderFlowRow(row, rank, flow) {
   setCellText(row.cells[6], flow.tcp_state || '');
 }
 
-function updateFlowTable(flows) {
-  const tbody = document.getElementById('flowsBody');
-  const empty = document.getElementById('flowsEmpty');
+function updateFlowTable(flows, renderTsMs) {
+  const tbody = ui.flowsBody;
+  const empty = ui.flowsEmpty;
+  if (!tbody || !empty) {
+    return;
+  }
 
   if (!flows || flows.length === 0) {
     empty.style.display = '';
+    lastFlowTableSignature = '';
+    lastFlowTableUpdateAtMs = renderTsMs;
     clearFlowRows();
     return;
   }
+
+  if (
+    FLOW_TABLE_UPDATE_INTERVAL_MS > 0 &&
+    lastFlowTableUpdateAtMs > 0 &&
+    renderTsMs - lastFlowTableUpdateAtMs < FLOW_TABLE_UPDATE_INTERVAL_MS
+  ) {
+    return;
+  }
+
+  const nextSignature = flowTableSignature(flows);
+  if (nextSignature === lastFlowTableSignature) {
+    lastFlowTableUpdateAtMs = renderTsMs;
+    return;
+  }
+
   empty.style.display = 'none';
 
   while (flowRows.length < flows.length) {
@@ -804,18 +890,26 @@ function updateFlowTable(flows) {
 
   for (let i = 0; i < flows.length; i++) {
     const f = flows[i];
-    let row = flowRows[i];
+    const row = flowRows[i];
     if (!row) continue;
     row.tr.style.display = '';
-    renderFlowRow(row, i, f);
+    const rowSig = `${i + 1}|${flowRowSignature(f)}`;
+    if (row.signature !== rowSig) {
+      renderFlowRow(row, i, f);
+      row.signature = rowSig;
+    }
   }
 
   for (let i = flows.length; i < flowRows.length; i++) {
     const row = flowRows[i];
     if (row) {
       row.tr.style.display = 'none';
+      row.signature = '';
     }
   }
+
+  lastFlowTableSignature = nextSignature;
+  lastFlowTableUpdateAtMs = renderTsMs;
 }
 
 // ======================================================================
@@ -830,8 +924,11 @@ function appendPacketRow(pkt) {
     recentPacketQueue.push(pkt.id);
   }
 
-  const tbody = document.getElementById('packetsBody');
-  const empty = document.getElementById('packetsEmpty');
+  const tbody = ui.packetsBody;
+  const empty = ui.packetsEmpty;
+  if (!tbody || !empty) {
+    return;
+  }
   empty.style.display = 'none';
 
   const tr = document.createElement('tr');
@@ -865,9 +962,14 @@ function appendPacketRow(pkt) {
     }
     if (removed && Number(removed.dataset.id) === selectedPacketId) {
       selectedPacketId = null;
-      document.getElementById('detailEmpty').textContent = 'Select a packet to inspect';
-      document.getElementById('detailEmpty').style.display = '';
-      document.getElementById('detailContent').style.display = 'none';
+      selectedPacketRow = null;
+      if (ui.detailEmpty) {
+        ui.detailEmpty.textContent = 'Select a packet to inspect';
+        ui.detailEmpty.style.display = '';
+      }
+      if (ui.detailContent) {
+        ui.detailContent.style.display = 'none';
+      }
     }
     tbody.removeChild(removed);
   }
@@ -890,21 +992,25 @@ function flushPendingPackets() {
     if (evicted == null) {
       continue;
     }
-    if (!document.querySelector(`#packetsBody tr[data-id="${evicted}"]`)) {
+    if (!ui.packetsBody || !ui.packetsBody.querySelector(`tr[data-id="${evicted}"]`)) {
       recentPacketIds.delete(evicted);
     }
   }
 }
 
 function selectPacket(id, tr) {
-  // Highlight
-  document.querySelectorAll('#packetsBody tr.selected').forEach(el => el.classList.remove('selected'));
+  if (selectedPacketRow) {
+    selectedPacketRow.classList.remove('selected');
+  }
+  selectedPacketRow = tr;
   tr.classList.add('selected');
 
   selectedPacketId = id;
 
   // Switch to detail tab
-  switchTab('detail', document.querySelector('[data-tab="detail"]'));
+  if (ui.tabDetailBtn) {
+    switchTab('detail', ui.tabDetailBtn);
+  }
 
   // Request detail from server
   if (ws && ws.readyState === WebSocket.OPEN) {
@@ -912,9 +1018,13 @@ function selectPacket(id, tr) {
   }
 
   // Show loading state
-  document.getElementById('detailEmpty').textContent = 'Loading...';
-  document.getElementById('detailEmpty').style.display = '';
-  document.getElementById('detailContent').style.display = 'none';
+  if (ui.detailEmpty) {
+    ui.detailEmpty.textContent = 'Loading...';
+    ui.detailEmpty.style.display = '';
+  }
+  if (ui.detailContent) {
+    ui.detailContent.style.display = 'none';
+  }
 }
 
 // ======================================================================
@@ -923,8 +1033,13 @@ function selectPacket(id, tr) {
 function handlePacketDetail(detail) {
   if (detail.id !== selectedPacketId) return;
 
-  document.getElementById('detailEmpty').style.display = 'none';
-  const content = document.getElementById('detailContent');
+  if (ui.detailEmpty) {
+    ui.detailEmpty.style.display = 'none';
+  }
+  const content = ui.detailContent;
+  if (!content) {
+    return;
+  }
   content.style.display = '';
 
   let html = '';
@@ -947,10 +1062,19 @@ function handlePacketDetail(detail) {
 // ======================================================================
 function appendAlertRow(alert) {
   alertCount++;
-  document.getElementById('cardAlerts').textContent = alertCount;
+  if (ui.cardAlerts) {
+    const nextAlerts = String(alertCount);
+    if (ui.cardAlerts.textContent !== nextAlerts) {
+      ui.cardAlerts.textContent = nextAlerts;
+    }
+  }
 
-  const tbody = document.getElementById('alertsBody');
-  document.getElementById('alertsEmpty').style.display = 'none';
+  const tbody = ui.alertsBody;
+  const empty = ui.alertsEmpty;
+  if (!tbody || !empty) {
+    return;
+  }
+  empty.style.display = 'none';
 
   const tr = document.createElement('tr');
   tr.className = 'alert-row';
@@ -986,10 +1110,18 @@ function flushPendingAlerts() {
 // Tabs
 // ======================================================================
 function switchTab(name, btn) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  if (ui.tabs) {
+    for (let i = 0; i < ui.tabs.length; i++) {
+      ui.tabs[i].classList.remove('active');
+    }
+  }
   btn.classList.add('active');
-  document.getElementById('tabDetail').style.display = name === 'detail' ? '' : 'none';
-  document.getElementById('tabAlerts').style.display = name === 'alerts' ? '' : 'none';
+  if (ui.tabDetail) {
+    ui.tabDetail.style.display = name === 'detail' ? '' : 'none';
+  }
+  if (ui.tabAlerts) {
+    ui.tabAlerts.style.display = name === 'alerts' ? '' : 'none';
+  }
 }
 
 // ======================================================================
@@ -1042,28 +1174,67 @@ function handlePerfPong(msg) {
     clockOffsetMs = clockOffsetMs * 0.9 + sampleOffset * 0.1;
   }
 
-  updatePerfOverlay();
+  updatePerfOverlay(recvTs);
 }
 
-function updatePerfOverlay() {
+function computeLatencyPercentiles(values) {
+  if (!values || values.length === 0) {
+    return {
+      p50: Number.NaN,
+      p95: Number.NaN,
+      p99: Number.NaN
+    };
+  }
+
+  const sorted = values.slice().sort((a, b) => a - b);
+  return {
+    p50: percentileFromSorted(sorted, 50),
+    p95: percentileFromSorted(sorted, 95),
+    p99: percentileFromSorted(sorted, 99)
+  };
+}
+
+function percentileFromSorted(sorted, p) {
+  if (!sorted || sorted.length === 0) {
+    return Number.NaN;
+  }
+  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
+  return sorted[Math.max(0, idx)];
+}
+
+function updatePerfOverlay(nowMs) {
   if (!perfEnabled) {
     return;
   }
-  const overlay = document.getElementById('perfOverlay');
+  const overlay = ui.perfOverlay;
   if (!overlay) {
     return;
   }
 
-  const p50 = percentile(latencySamples, 50);
-  const p95 = percentile(latencySamples, 95);
-  const p99 = percentile(latencySamples, 99);
+  const renderTsMs = typeof nowMs === 'number' ? nowMs : Date.now();
+  if (
+    lastPerfOverlayUpdateMs === 0 ||
+    renderTsMs - lastPerfOverlayUpdateMs >= PERF_OVERLAY_UPDATE_INTERVAL_MS
+  ) {
+    const latency = computeLatencyPercentiles(latencySamples);
+    cachedLatencyP50 = latency.p50;
+    cachedLatencyP95 = latency.p95;
+    cachedLatencyP99 = latency.p99;
+    lastPerfOverlayUpdateMs = renderTsMs;
+  }
+
   const fps = frameRate();
 
-  overlay.textContent =
+  const text =
     `fps ${fps.toFixed(1)} | ` +
-    `lat p50 ${formatMs(p50)} p95 ${formatMs(p95)} p99 ${formatMs(p99)} | ` +
+    `lat p50 ${formatMs(cachedLatencyP50)} p95 ${formatMs(cachedLatencyP95)} p99 ${formatMs(cachedLatencyP99)} | ` +
     `drop ${droppedFrames} | ` +
     `offset ${formatMs(clockOffsetMs)}`;
+
+  if (text !== lastPerfOverlayText) {
+    overlay.textContent = text;
+    lastPerfOverlayText = text;
+  }
 }
 
 // ======================================================================
@@ -1100,15 +1271,6 @@ function frameRate() {
   return ((frameRenderTimes.length - 1) * 1000) / spanMs;
 }
 
-function percentile(values, p) {
-  if (!values || values.length === 0) {
-    return Number.NaN;
-  }
-  const sorted = values.slice().sort((a, b) => a - b);
-  const idx = Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1);
-  return sorted[Math.max(0, idx)];
-}
-
 function formatTimestamp(ts) {
   const secs = Math.floor(ts);
   const micros = Math.round((ts - secs) * 1000000);
@@ -1126,11 +1288,49 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function cacheUiElements() {
+  ui.statusDot = document.getElementById('statusDot');
+  ui.statusText = document.getElementById('statusText');
+  ui.perfOverlay = document.getElementById('perfOverlay');
+  ui.updateRate = document.getElementById('updateRate');
+  ui.pauseBtn = document.getElementById('pauseBtn');
+
+  ui.cardMbps = document.getElementById('cardMbps');
+  ui.cardPps = document.getElementById('cardPps');
+  ui.cardFlows = document.getElementById('cardFlows');
+  ui.cardAlerts = document.getElementById('cardAlerts');
+
+  ui.flowsBody = document.getElementById('flowsBody');
+  ui.flowsEmpty = document.getElementById('flowsEmpty');
+
+  ui.packetsBody = document.getElementById('packetsBody');
+  ui.packetsEmpty = document.getElementById('packetsEmpty');
+
+  ui.detailEmpty = document.getElementById('detailEmpty');
+  ui.detailContent = document.getElementById('detailContent');
+
+  ui.alertsBody = document.getElementById('alertsBody');
+  ui.alertsEmpty = document.getElementById('alertsEmpty');
+
+  ui.tabs = document.querySelectorAll('.tab');
+  ui.tabDetailBtn = document.querySelector('[data-tab="detail"]');
+  ui.tabDetail = document.getElementById('tabDetail');
+  ui.tabAlerts = document.getElementById('tabAlerts');
+
+  ui.chartCanvas = document.getElementById('chartCanvas');
+}
+
 // ======================================================================
 // Chart setup
 // ======================================================================
 function initChart() {
-  const ctx = document.getElementById('chartCanvas').getContext('2d');
+  if (!ui.chartCanvas) {
+    return;
+  }
+  const ctx = ui.chartCanvas.getContext('2d');
+  if (!ctx) {
+    return;
+  }
   chart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -1200,13 +1400,18 @@ function initChart() {
 // Init
 // ======================================================================
 document.addEventListener('DOMContentLoaded', () => {
-  if (perfEnabled) {
-    document.getElementById('perfOverlay').style.display = '';
+  cacheUiElements();
+  if (perfEnabled && ui.perfOverlay) {
+    ui.perfOverlay.style.display = '';
   }
-  document.getElementById('updateRate').addEventListener('change', (event) => {
-    setUpdateIntervalMs(Number(event.target.value));
-  });
-  document.getElementById('pauseBtn').addEventListener('click', togglePause);
+  if (ui.updateRate) {
+    ui.updateRate.addEventListener('change', (event) => {
+      setUpdateIntervalMs(Number(event.target.value));
+    });
+  }
+  if (ui.pauseBtn) {
+    ui.pauseBtn.addEventListener('click', togglePause);
+  }
   syncControls();
   initChart();
   connect();

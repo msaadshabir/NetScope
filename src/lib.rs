@@ -5,6 +5,7 @@ pub mod capture;
 pub mod config;
 pub mod display;
 pub mod flow;
+pub mod memory;
 pub mod pipeline;
 pub mod protocol;
 pub mod web;

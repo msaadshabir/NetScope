@@ -11,7 +11,7 @@ Then open <http://127.0.0.1:8080>.
 ## Features
 
 - **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, and alert count.
-- **Time-series chart** -- dual-axis throughput and packet rate history (Chart.js, last 120 data points).
+- **Time-series chart** -- dual-axis throughput and packet rate history (Chart.js, last 240 data points).
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.
 - **Packet inspector** -- click any packet to see the full protocol tree (Ethernet, IP, TCP/UDP/ICMP fields) and hex dump, fetched on demand from the server.
@@ -46,7 +46,7 @@ In perf mode, the browser:
 - displays fps, latency percentiles, dropped frame count, and offset in the header.
 
 For high-rate capture testing, use `tick_ms = 33` and `sample_rate = 0` to focus measurement on the stats/render path rather than the live packet feed.
-The instrumentation path is implemented; the remaining acceptance step is the 60-second validation run against real traffic.
+The accepted Target 3 replay run held `29.3 fps`, `p99 31.5ms`, and `drop 0`, which confirmed the browser render path was within budget after the frontend follow-up pass.
 
 ## Architecture
 

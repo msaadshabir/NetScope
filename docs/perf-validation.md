@@ -45,7 +45,10 @@ Acceptance criteria:
 
 - periodic stats lines show `drops=0`,
 - final summary shows `Dispatch drops: 0`,
-- kernel stats show `Kernel dropped: 0` and `Interface dropped: 0`.
+- kernel stats show `Kernel dropped: 0` and `Interface dropped: 0`,
+- median periodic packet rate stays within 95% of the target replay rate.
+
+The helper script now prints a PASS/FAIL summary automatically from the captured log.
 
 ## Target 2: handshake hot path latency
 
@@ -58,6 +61,12 @@ Acceptance criteria:
 - median `< 1000 ns/pkt`.
 
 ## Target 3: web 30fps and p99 < 100ms
+
+Current accepted evidence:
+
+- `tmp/perf/20260313-151454.web.netscope.log`
+- `tmp/perf/20260313-151454.web.tcpreplay.log`
+- Live overlay result: `29.3 fps | lat p50 13.6ms p95 28.6ms p99 31.5ms | drop 0 | offset 0.2ms`
 
 Use the perf config:
 
@@ -81,11 +90,13 @@ Then open:
 http://127.0.0.1:8080/?perf=1
 ```
 
-Acceptance criteria over >=60 seconds:
+Spot-check acceptance criteria:
 
 - fps ~30,
 - p99 latency < 100ms,
 - stable frame continuity.
+
+Use a longer soak only when regression-testing changes to the live render or websocket path.
 
 Optional frame-sequence continuity check:
 
@@ -111,6 +122,9 @@ Acceptance criteria:
 
 - CLI output reports `Budget check: PASS (< 500 MB)`,
 - ignored test passes.
+
+The CLI memory path now reads RSS from `/proc/self/status` on Linux and falls back to `ps`
+elsewhere, so the same command works across supported development platforms.
 
 ## Notes
 

@@ -83,14 +83,16 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
     let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>(4096);
     let (broadcast_tx, _) = broadcast::channel::<BroadcastFrame>(1024);
 
+    let bind_addr = format!("{}:{}", config.bind, config.port);
+    let listener = std::net::TcpListener::bind(&bind_addr)?;
+    listener.set_nonblocking(true)?;
+
     let state = Arc::new(AppState {
         broadcast_tx: broadcast_tx.clone(),
         latest_frame: Mutex::new(None),
         packet_store: Mutex::new(PacketStore::new(config.packet_buffer)),
         tick_ms: config.tick_ms,
     });
-
-    let bind_addr = format!("{}:{}", config.bind, config.port);
 
     // Spawn a dedicated thread with its own tokio runtime
     let state_clone = state.clone();
@@ -115,10 +117,10 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
                     .fallback(get(static_handler))
                     .with_state(state_clone);
 
-                let listener = match tokio::net::TcpListener::bind(&bind_addr).await {
+                let listener = match tokio::net::TcpListener::from_std(listener) {
                     Ok(listener) => listener,
                     Err(err) => {
-                        tracing::error!("failed to bind web server to {}: {}", bind_addr, err);
+                        tracing::error!("failed to start web server on {}: {}", bind_addr, err);
                         return;
                     }
                 };

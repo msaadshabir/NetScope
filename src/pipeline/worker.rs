@@ -3,7 +3,7 @@
 
 use crossbeam_channel::{Receiver, Sender};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::analysis::anomaly::AnomalyDetector;
 use crate::config::{AnalysisConfig, FlowConfig, WebConfig};
@@ -58,7 +58,7 @@ pub struct Worker {
     // Per-tick accumulators
     tick_bytes: u64,
     tick_packets: u64,
-    tick_last: Instant,
+    tick_next: Instant,
 }
 
 impl Worker {
@@ -70,6 +70,7 @@ impl Worker {
         heavy_hitter_top_n: usize,
         buffer_returner: PacketBufReturner,
     ) -> Self {
+        let tick_interval = tick_interval_for(&web_cfg);
         let flow_tracker = FlowTracker::new(
             flow_cfg.timeout_secs,
             flow_cfg.max_flows,
@@ -94,7 +95,7 @@ impl Worker {
             top_flows_hh: SpaceSavingTopFlows::new(heavy_hitter_top_n),
             tick_bytes: 0,
             tick_packets: 0,
-            tick_last: Instant::now(),
+            tick_next: Instant::now() + tick_interval,
         }
     }
 
@@ -116,9 +117,13 @@ impl Worker {
                 break;
             }
 
-            // Use recv_timeout so we still emit ticks during traffic lulls
-            // and can check the running flag periodically.
-            match rx.recv_timeout(std::time::Duration::from_millis(10)) {
+            let now = Instant::now();
+            if now >= self.tick_next {
+                self.emit_tick_at(&agg_tx, now);
+                continue;
+            }
+
+            match rx.recv_timeout(timeout_until_tick(now, self.tick_next)) {
                 Ok(mut pkt) => {
                     self.process_packet(&pkt, &agg_tx);
                     let owned = std::mem::take(&mut pkt.data);
@@ -203,12 +208,16 @@ impl Worker {
 
     fn maybe_emit_tick(&mut self, agg_tx: &Sender<WorkerEvent>) {
         let now = Instant::now();
-        if now.duration_since(self.tick_last).as_millis() as u64 >= self.web_cfg.tick_ms {
-            self.emit_tick(agg_tx);
+        if now >= self.tick_next {
+            self.emit_tick_at(agg_tx, now);
         }
     }
 
     fn emit_tick(&mut self, agg_tx: &Sender<WorkerEvent>) {
+        self.emit_tick_at(agg_tx, Instant::now());
+    }
+
+    fn emit_tick_at(&mut self, agg_tx: &Sender<WorkerEvent>, now: Instant) {
         let candidates = self.top_flows_hh.take_top(self.heavy_hitter_top_n);
         let candidate_keys: Vec<crate::flow::CompactFlowKey> =
             candidates.iter().map(|(key, _)| *key).collect();
@@ -228,6 +237,77 @@ impl Worker {
 
         self.tick_bytes = 0;
         self.tick_packets = 0;
-        self.tick_last = Instant::now();
+        self.tick_next =
+            advance_tick_deadline(self.tick_next, now, tick_interval_for(&self.web_cfg));
+    }
+}
+
+#[inline]
+fn tick_interval_for(web_cfg: &WebConfig) -> Duration {
+    Duration::from_millis(web_cfg.tick_ms.max(1))
+}
+
+#[inline]
+fn timeout_until_tick(now: Instant, tick_next: Instant) -> Duration {
+    if now >= tick_next {
+        Duration::ZERO
+    } else {
+        tick_next.duration_since(now)
+    }
+}
+
+#[inline]
+fn advance_tick_deadline(mut tick_next: Instant, now: Instant, tick_interval: Duration) -> Instant {
+    if now < tick_next {
+        return now + tick_interval;
+    }
+
+    loop {
+        tick_next += tick_interval;
+        if tick_next > now {
+            return tick_next;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_until_tick_returns_remaining_duration() {
+        let now = Instant::now();
+        let tick_next = now + Duration::from_millis(33);
+
+        assert_eq!(
+            timeout_until_tick(now, tick_next),
+            Duration::from_millis(33)
+        );
+    }
+
+    #[test]
+    fn advance_tick_deadline_skips_missed_intervals() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(33);
+        let tick_next = start + interval;
+        let now = start + Duration::from_millis(80);
+
+        assert_eq!(
+            advance_tick_deadline(tick_next, now, interval),
+            start + Duration::from_millis(99)
+        );
+    }
+
+    #[test]
+    fn advance_tick_deadline_resets_from_now_for_early_flush() {
+        let start = Instant::now();
+        let interval = Duration::from_millis(33);
+        let tick_next = start + interval;
+        let now = start + Duration::from_millis(10);
+
+        assert_eq!(
+            advance_tick_deadline(tick_next, now, interval),
+            now + interval
+        );
     }
 }

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$ROOT_DIR"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -84,11 +87,16 @@ if [[ -n "$IFACE" ]]; then
 fi
 
 replay_pid=""
-cleanup() {
+stop_replay() {
   if [[ -n "$replay_pid" ]] && kill -0 "$replay_pid" >/dev/null 2>&1; then
-    kill "$replay_pid" >/dev/null 2>&1 || true
+    kill -INT "$replay_pid" >/dev/null 2>&1 || true
     wait "$replay_pid" 2>/dev/null || true
+    replay_pid=""
   fi
+}
+
+cleanup() {
+  stop_replay
 }
 trap cleanup EXIT
 
@@ -100,12 +108,21 @@ fi
 
 echo
 echo "Starting NetScope web run. Open: http://127.0.0.1:8080/?perf=1"
-echo "Run for >=60s and verify: ~30fps and p99 < 100ms."
+echo "Quick spot-check target: ~30fps, p99 < 100ms, drop 0."
+echo "Accepted reference: tmp/perf/20260313-151454.web.*.log -> 29.3 fps | p99 31.5ms | drop 0"
+echo "Let the overlay settle for ~30s; use a longer soak only when regression-testing."
 
-sudo "$BINARY" \
-  --config "$CONFIG" \
-  --interface "$IFACE" \
-  --pipeline \
-  --quiet \
-  --web \
-  | tee "$APP_LOG"
+args=(
+  --config "$CONFIG"
+  --pipeline
+  --quiet
+  --web
+)
+
+if [[ -n "$IFACE" ]]; then
+  args+=(--interface "$IFACE")
+fi
+
+sudo "$BINARY" "${args[@]}" | tee "$APP_LOG"
+
+stop_replay

@@ -82,7 +82,7 @@ immediate_mode = true
 - Increase `tick_ms` (less frequent stats updates). Use `33` for roughly 30fps when you want smooth live updates.
 - Reduce `payload_bytes` (smaller hex dumps per packet).
 - Use `?perf=1` in the dashboard URL to inspect fps, latency p50/p95/p99, dropped frames, and client/server clock offset while tuning.
-- The Phase 3 measurement harness is implemented; the remaining acceptance step is the 60-second validation run under traffic.
+- The current accepted Target 3 evidence is the representative replay run in `tmp/perf/20260313-151454.web.*.log` with `29.3 fps`, `p99 31.5ms`, and `drop 0`.
 
 ### Reducing memory usage
 

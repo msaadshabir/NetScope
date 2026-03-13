@@ -1,11 +1,11 @@
 mod cli;
 
-use netscope::{analysis, capture, config, display, flow, pipeline, protocol, web};
+use netscope::{analysis, capture, config, display, flow, memory, pipeline, protocol, web};
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 
 fn main() {
@@ -70,7 +70,7 @@ fn run_synthetic_flow_memory(count: usize) {
 
     tracker.insert_synthetic_ipv4_flows(count);
     let elapsed = start.elapsed().as_secs_f64();
-    let rss_kb = current_rss_kb().unwrap_or(0);
+    let rss_kb = memory::current_rss_kb().unwrap_or(0);
 
     println!("Synthetic flow benchmark complete.");
     println!("  Flows inserted:     {}", tracker.len());
@@ -87,20 +87,6 @@ fn run_synthetic_flow_memory(count: usize) {
     } else {
         println!("  RSS (estimated):    unavailable");
     }
-}
-
-fn current_rss_kb() -> Option<u64> {
-    let pid = std::process::id().to_string();
-    let output = std::process::Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let text = String::from_utf8(output.stdout).ok()?;
-    text.trim().parse::<u64>().ok()
 }
 
 /// List available network interfaces and print them.
