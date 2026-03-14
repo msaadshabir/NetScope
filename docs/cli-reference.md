@@ -4,6 +4,10 @@
 Usage: netscope [OPTIONS]
 ```
 
+This page lists CLI flags only. Some runtime tuning knobs are config-file only; see [Configuration](configuration.md) for the full schema.
+
+Defaults below refer to the compiled defaults before any `--config` file is loaded. If a config file is present, explicitly provided CLI flags still take precedence.
+
 ## Capture Options
 
 | Flag | Short | Type | Default | Description |
@@ -16,6 +20,8 @@ Usage: netscope [OPTIONS]
 | `--snaplen <N>` | `-s` | int | 65535 | Maximum bytes captured per packet. |
 | `--timeout-ms <MS>` | `-t` | int | 100 | Read timeout in milliseconds for the pcap handle. |
 | `--list-interfaces` | `-l` | flag | | List available network interfaces and exit. |
+
+libpcap buffer sizing and immediate mode are configured through the `[capture]` section of the config file.
 
 ## Output Options
 
@@ -65,6 +71,8 @@ See [Anomaly Detection](anomaly-detection.md) for threshold configuration (requi
 | `--web-bind <ADDR>` | string | `127.0.0.1` | HTTP server bind address. |
 | `--web-port <PORT>` | int | 8080 | HTTP server port. |
 
+Tick cadence, packet sampling, packet-buffer sizing, payload truncation, and dashboard top-N settings are configured through the `[web]` section.
+
 See [Web Dashboard](web-dashboard.md) for full details.
 
 ## Pipeline Options
@@ -73,6 +81,8 @@ See [Web Dashboard](web-dashboard.md) for full details.
 |---|---|---|---|
 | `--pipeline` | flag | off | Enable the sharded pipeline for multi-core packet processing. |
 | `--workers <N>` | int | 0 | Number of pipeline worker threads. 0 = auto-detect (half of CPU count, clamped to 1..8). Setting `--workers` to a non-zero value implicitly enables `--pipeline`. |
+
+Queue sizing (`pipeline.channel_capacity`) is configured through the config file.
 
 See [Sharded Pipeline](pipeline.md) for architecture and tuning details.
 

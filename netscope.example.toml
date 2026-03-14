@@ -1,11 +1,15 @@
+# Example NetScope config template.
+# CLI flags override these values when explicitly provided.
+# For field descriptions and authoritative defaults, see docs/configuration.md.
+
 [capture]
-interface = "en0"
+# interface = "en0"
 promiscuous = true
 snaplen = 65535
 timeout_ms = 100
-buffer_size_mb = 8
-immediate_mode = true
-filter = "tcp"
+buffer_size_mb = 0     # 0/omit = libpcap default buffer size
+immediate_mode = false
+# filter = "tcp port 443"
 
 [run]
 count = 0
@@ -31,6 +35,7 @@ top_flows = 0
 rtt = true
 retrans = true
 out_of_order = true
+# Set all three to false to activate compact scale-mode flow storage.
 # Omit or set to "" to disable alert file
 alerts_jsonl = ""
 
@@ -64,4 +69,4 @@ payload_bytes = 256
 [pipeline]
 enabled = false
 workers = 0          # 0 = auto-detect (half of CPU count, clamped 1..8)
-channel_capacity = 4096
+channel_capacity = 4096  # per-worker queue size; config-file only

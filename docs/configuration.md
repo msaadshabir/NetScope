@@ -6,7 +6,9 @@ NetScope supports TOML configuration files for persistent settings. Load a confi
 sudo netscope --config netscope.toml
 ```
 
-A complete example is provided in [`netscope.example.toml`](../netscope.example.toml) at the repository root.
+This page is the authoritative configuration schema. The defaults in the tables below mirror the compiled defaults in `src/config.rs`.
+
+A full template is provided in [`netscope.example.toml`](../netscope.example.toml) at the repository root.
 
 ## Precedence Rules
 
@@ -20,6 +22,17 @@ For boolean options, `--flag` and `--no-flag` pairs let you override in either d
 # Config says quiet = true, CLI overrides it back to false:
 sudo netscope --config my.toml --no-quiet
 ```
+
+## CLI vs Config-only Settings
+
+The CLI exposes common capture, output, and mode toggles, but some tuning knobs are only available in TOML. Common config-only examples include:
+
+- `capture.buffer_size_mb` and `capture.immediate_mode`
+- `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order`
+- `web.tick_ms`, `web.top_n`, `web.packet_buffer`, `web.sample_rate`, and `web.payload_bytes`
+- `pipeline.channel_capacity`
+
+Use [CLI Reference](cli-reference.md) for flag-level help and this page for the full config schema.
 
 ## Path Fields
 
@@ -154,4 +167,4 @@ enabled = true
 
 ## Full Example
 
-See [`netscope.example.toml`](../netscope.example.toml) for a complete config file with all keys and defaults.
+See [`netscope.example.toml`](../netscope.example.toml) for a full template covering all sections with comments and representative optional keys. Use the tables above as the source of truth for compiled defaults.
