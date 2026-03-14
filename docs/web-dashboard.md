@@ -46,7 +46,6 @@ In perf mode, the browser:
 - displays fps, latency percentiles, dropped frame count, and offset in the header.
 
 For high-rate capture testing, use `tick_ms = 33` and `sample_rate = 0` to focus measurement on the stats/render path rather than the live packet feed.
-The accepted Target 3 replay run held `29.3 fps`, `p99 31.5ms`, and `drop 0`, which confirmed the browser render path was within budget after the frontend follow-up pass.
 
 ## Architecture
 
@@ -70,17 +69,16 @@ In both modes, the web server runs in a dedicated thread with its own tokio runt
 
 ### Event Types
 
-The server sends JSON messages to clients, each with a `"type"` field:
+The server sends JSON messages to clients, each with a `"type"` field. The current live path uses merged `frame` messages plus a few request/response helpers:
 
 | Type            | Description                                                                  |
 | --------------- | ---------------------------------------------------------------------------- |
 | `hello`         | Sent on connect. Contains `version` and `tick_ms`.                           |
 | `frame`         | Primary live update message. Contains `frame_seq`, a `tick` payload, and batched `packets` / `alerts`. |
-| `stats_tick`    | Legacy standalone stats message format retained for compatibility with older clients. |
-| `packet_sample` | Legacy standalone sampled-packet message format retained for compatibility.   |
 | `packet_detail` | Full protocol tree and hex dump for a specific packet (requested by client). |
-| `alert`         | Legacy standalone alert message format retained for compatibility.            |
 | `perf_pong`     | Response to client perf probes with echoed `client_ts` and `server_ts`.      |
+
+Standalone `stats_tick`, `packet_sample`, and `alert` variants still exist in the Rust message enum, but the current server path emits merged `frame` messages for live updates.
 
 Clients can request packet details by sending:
 
@@ -113,7 +111,7 @@ These can be set in the `[web]` section of the config file. `--web-bind` and `--
 
 ## Tuning for High Traffic
 
-At high capture rates, the event channel (capacity 4096) applies backpressure. Dropped events are logged at TRACE level (`-vvv`). To reduce load:
+At high capture rates, the event channel (capacity 4096) can fill, causing dashboard events to be dropped instead of blocking capture. Dropped events are logged at TRACE level (`-vvv`). To reduce load:
 
 1. **Increase `sample_rate`** -- e.g., set to `10` to send only every 10th packet to the UI.
 2. **Reduce `top_n`** -- fewer flows per tick means less data serialized per tick.

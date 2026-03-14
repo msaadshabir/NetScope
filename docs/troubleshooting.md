@@ -72,9 +72,9 @@ Possible causes:
 1. **No traffic** -- Verify packets are being captured (check terminal output without `--quiet`).
 2. **`sample_rate = 0`** -- This disables the packet feed entirely. Set to 1 or higher.
 3. **Filter too restrictive** -- Remove the BPF filter temporarily.
-4. **Pipeline mode tick delay** -- The aggregator waits for all shards to report. If one shard receives no traffic, ticks are still emitted but may be delayed.
+4. **Pipeline mode timing** -- The aggregator tries to merge all shard updates for a tick, but it also forces a merge shortly after the tick deadline so idle shards do not stall the dashboard.
 
-Note: the aggregator enforces a deadline and may emit a merged tick without every shard present to avoid idle-shard gating. This can make `active_flows` and top flows lag slightly for a completely idle shard, but keeps frame cadence stable.
+Note: metrics can still lag slightly during uneven traffic, but completely idle shards should not block frames indefinitely.
 
 ## Web Dashboard Laggy or Dropping Data
 

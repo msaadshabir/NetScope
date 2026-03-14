@@ -26,23 +26,11 @@ sudo ./target/release/netscope --list-interfaces
 # Capture on the default interface
 sudo ./target/release/netscope
 
-# Capture TCP traffic on a specific interface
-sudo ./target/release/netscope -i en0 -f "tcp port 443" -c 100
-
-# Throughput stats with top flows
-sudo ./target/release/netscope --quiet --stats --top-flows 5
-
 # Start the web dashboard (open http://127.0.0.1:8080)
 sudo ./target/release/netscope --web --quiet
-
-# Multi-core pipeline mode
-sudo ./target/release/netscope --pipeline --web --quiet --anomalies
-
-# Dev alternative (avoids PATH issues under sudo):
-# sudo cargo run --release -- --web --quiet
 ```
 
-Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux).
+Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md).
 
 ## Documentation
 
@@ -58,7 +46,6 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux).
 | **[Anomaly Detection](docs/anomaly-detection.md)** | SYN flood and port scan detection                   |
 | **[Exports](docs/exports.md)**                     | Output formats (JSON, CSV, JSONL, pcap)             |
 | **[Performance](docs/performance.md)**             | Benchmarks and tuning checklist                     |
-| **[Perf Validation](docs/perf-validation.md)**     | Acceptance-run workflow for all perf targets        |
 | **[Troubleshooting](docs/troubleshooting.md)**     | Common issues and fixes                             |
 | **[Development](docs/development.md)**             | Repo layout, tests, extending protocols             |
 

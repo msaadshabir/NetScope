@@ -86,7 +86,7 @@ Each worker emits a partial tick containing its byte/packet counts and top flows
 - Top flows are merged across shards and re-sorted globally.
 - The tick interval is paced by the web tick cadence, not indefinitely gated by an idle shard.
 
-In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls. The aggregator also enforces a deadline (`web.tick_ms * 2`) and will merge whatever shards have reported by that deadline to avoid idle-shard gating.
+In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls. The aggregator also enforces a short deadline slightly above `web.tick_ms` and will merge whatever shards have reported by then to avoid idle-shard gating.
 
 ## Shutdown Behavior
 

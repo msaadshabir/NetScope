@@ -42,6 +42,8 @@ cargo bench
 
 This runs the Criterion benchmarks defined in `benches/hot_path.rs`. Results are written to `target/criterion/` with HTML reports.
 
+For repeatable replay-based throughput or web checks, maintainer helper scripts and example configs live in `scripts/perf/`.
+
 To run a specific benchmark:
 
 ```bash
@@ -82,7 +84,6 @@ immediate_mode = true
 - Increase `tick_ms` (less frequent stats updates). Use `33` for roughly 30fps when you want smooth live updates.
 - Reduce `payload_bytes` (smaller hex dumps per packet).
 - Use `?perf=1` in the dashboard URL to inspect fps, latency p50/p95/p99, dropped frames, and client/server clock offset while tuning.
-- The current accepted Target 3 evidence is the representative replay run in `tmp/perf/20260313-151454.web.*.log` with `29.3 fps`, `p99 31.5ms`, and `drop 0`.
 
 ### Reducing memory usage
 
