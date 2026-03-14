@@ -19,11 +19,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pipeline-mode web updates now use merged websocket `frame` messages with latest-frame replay on reconnect / lag recovery.
 - Pipeline-mode top-flow reporting now decouples CLI `stats.top_flows` from dashboard `web.top_n`.
 - Updated documentation for performance benchmarks and flow table sizing behavior.
+- Refreshed the docs to reduce overlap between setup, usage, CLI, configuration, and feature guides.
 
 ### Removed
 
 - `CONTRIBUTING.md`
 - `docs/index.md` as it was fully redundant with the main `README.md` documentation table.
+- `docs/perf-validation.md` in favor of keeping evergreen perf guidance in `docs/performance.md` and helper scripts in `scripts/perf/`.
 
 ## [0.1.0] - 2026-02-27
 

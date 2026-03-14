@@ -95,6 +95,8 @@ If precise anomaly detection is important, consider inline mode or reducing thre
 
 ## Configuration Summary
 
+For authoritative defaults and the full schema, see [Configuration](configuration.md). The snippet below is a representative example.
+
 ```toml
 [analysis]
 alerts_jsonl = "alerts.jsonl"  # optional file output

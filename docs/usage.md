@@ -126,3 +126,5 @@ Control log output with `-v` flags:
 ```bash
 sudo netscope -vv
 ```
+
+At `-vv` and above, NetScope switches to the detailed per-packet CLI view (including the hex-dump preview) even if `--hex-dump` is not explicitly set.

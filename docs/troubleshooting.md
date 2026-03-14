@@ -75,7 +75,7 @@ Possible causes:
 3. **Filter too restrictive** -- Remove the BPF filter temporarily.
 4. **Pipeline mode timing** -- The aggregator tries to merge all shard updates for a tick, but it also forces a merge shortly after the tick deadline so idle shards do not stall the dashboard.
 
-Note: metrics can still lag slightly during uneven traffic, but completely idle shards should not block frames indefinitely.
+Note: `sample_rate = 0` disables live packet samples only; stats and alerts can still continue to update. Metrics can also lag slightly during uneven traffic, but completely idle shards should not block frames indefinitely.
 
 ## Web Dashboard Laggy or Dropping Data
 
@@ -84,6 +84,7 @@ Note: metrics can still lag slightly during uneven traffic, but completely idle 
 **Fixes:**
 
 - Increase `sample_rate` (e.g., 10 or 100) to reduce packet feed volume.
+- In pipeline mode, sampling is still capture-wide, so raising `sample_rate` reduces total samples rather than samples per shard.
 - Reduce `top_n` to send fewer flows per tick.
 - Increase `tick_ms` to reduce update frequency.
 - Reduce `payload_bytes` to store less data per packet.

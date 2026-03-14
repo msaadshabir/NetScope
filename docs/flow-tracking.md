@@ -14,7 +14,7 @@ Where each endpoint is `(ip, port)` and endpoints are ordered deterministically 
 
 Only TCP and UDP flows are tracked. ICMP and other protocols are parsed but do not create flow entries.
 
-For memory-sensitive runs, NetScope also has an internal scale-mode storage path. When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, flows are stored in compact split IPv4/IPv6 tables and omit deep TCP sequence-tracking state.
+For memory-sensitive runs, NetScope also has an internal scale-mode storage path. When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, flows are stored in compact split IPv4/IPv6 tables and omit deep TCP sequence-tracking state. This switch is automatic and is driven entirely by those three analysis toggles.
 
 ## Per-Flow Data
 
@@ -103,6 +103,8 @@ In scale mode, that heavy-hitter candidate path also uses the compact internal f
 In pipeline mode, the heavy-hitter limit is sized from `max(stats.top_flows, web.top_n)`. That lets the CLI request more top flows than the web dashboard displays without widening the dashboard payload.
 
 ## Configuration Summary
+
+For authoritative defaults and the full schema, see [Configuration](configuration.md). The table below highlights the flow-related keys that matter most for this subsystem.
 
 | Key | Default | Description |
 |---|---|---|

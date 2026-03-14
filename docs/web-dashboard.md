@@ -30,6 +30,8 @@ Then open <http://127.0.0.1:8080>.
 
 The frontend is embedded into the binary at compile time -- no external files or build steps are needed.
 
+Exact UI details live in the embedded frontend assets under `web/static/index.html`, so presentation-specific behavior is implemented there.
+
 ## Perf Mode
 
 Open the dashboard with `?perf=1` to enable the performance overlay:
@@ -65,7 +67,7 @@ flowchart TD
     W2 -->|broadcast| C2[WebSocket Clients]
 ```
 
-In both modes, the web server runs in a dedicated thread with its own tokio runtime. It receives events through an `mpsc` channel (capacity 4096) and broadcasts them to all connected WebSocket clients.
+In both modes, the web server runs in a dedicated thread with its own tokio runtime. It receives events through an `mpsc` channel (capacity 4096) and broadcasts them to all connected WebSocket clients. Packet detail lookups only work while a packet remains in the ring buffer.
 
 ### Event Types
 
@@ -108,6 +110,8 @@ Clients dedupe merged frames by `frame_seq` so reconnect / lag recovery does not
 | `payload_bytes` | `256`   | Maximum raw bytes stored per packet for hex dump display.                                                                              |
 
 These can be set in the `[web]` section of the config file. `--web-bind` and `--web-port` are available as CLI flags; the other keys require a config file.
+
+Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. The packet ring buffer still respects `packet_buffer`, but the underlying deque preallocates at most 8192 entries to avoid large upfront allocations. For authoritative defaults, see [Configuration](configuration.md).
 
 ## Tuning for High Traffic
 

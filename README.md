@@ -30,7 +30,7 @@ sudo ./target/release/netscope
 sudo ./target/release/netscope --web --quiet
 ```
 
-Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md).
+Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md). For dashboard-specific behavior and tuning, see [Web Dashboard](docs/web-dashboard.md).
 
 ## Documentation
 
@@ -54,7 +54,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Fo
 - Capture typically requires **root privileges**. The web dashboard binds to `127.0.0.1` by default for security.
 - IPv6 extension headers are not parsed (payload starts after the fixed 40-byte header).
 - IPv4 non-initial fragments are skipped for flow tracking.
-- Timestamps are `HH:MM:SS.microseconds` (UTC).
+- Timestamps are formatted as `HH:MM:SS.microseconds` from UNIX-epoch UTC capture times.
 
 ## License
 

@@ -8,6 +8,8 @@ This page lists CLI flags only. Some runtime tuning knobs are config-file only; 
 
 Defaults below refer to the compiled defaults before any `--config` file is loaded. If a config file is present, explicitly provided CLI flags still take precedence.
 
+For boolean flags, the "Default" column describes the resulting default behavior, not that the flag is implicitly passed on the command line.
+
 ## Capture Options
 
 | Flag | Short | Type | Default | Description |
@@ -27,7 +29,7 @@ libpcap buffer sizing and immediate mode are configured through the `[capture]` 
 
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
-| `--hex-dump` | | flag | off | Show hex dump of each packet. |
+| `--hex-dump` | | flag | off | Show detailed per-packet output with a hex-dump preview. |
 | `--no-hex-dump` | | flag | | Disable hex dump output. |
 | `--quiet` | | flag | off | Suppress per-packet terminal output. Useful for stats-only or web-only runs. |
 | `--no-quiet` | | flag | | Re-enable per-packet output (overrides config file). |
@@ -35,6 +37,8 @@ libpcap buffer sizing and immediate mode are configured through the `[capture]` 
 | `--write-pcap <PATH>` | | path | (none) | Write captured packets to a pcap file. |
 | `--export-json <PATH>` | | path | (none) | Export the flow table to JSON on exit. |
 | `--export-csv <PATH>` | | path | (none) | Export the flow table to CSV on exit. |
+
+Note: verbosity level `-vv` or higher also enables detailed per-packet output even if `--hex-dump` is not set.
 
 ## Stats Options
 

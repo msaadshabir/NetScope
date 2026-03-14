@@ -20,7 +20,7 @@ Export the flow table on exit:
 sudo netscope --export-json flows.json --export-csv flows.csv
 ```
 
-Both formats contain the same data -- a snapshot of all tracked flows at capture exit. In pipeline mode, the export contains merged snapshots from all worker shards, sorted by total bytes (descending).
+Both formats contain the same data -- a snapshot of all tracked flows at capture exit. In pipeline mode, the export contains merged snapshots from all worker shards, sorted by total bytes (descending). When scale mode is active, RTT fields remain `null` and retransmission / out-of-order counters remain `0` in exported snapshots.
 
 ### JSON Format
 

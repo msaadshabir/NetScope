@@ -139,6 +139,8 @@ When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `fa
 | `sample_rate`   | int    | `1`           | Send every Nth packet to the UI. Set to 0 to disable the live packet feed entirely. |
 | `payload_bytes` | int    | `256`         | Maximum raw bytes stored per packet for hex dump display.                           |
 
+These keys apply only when `web.enabled = true`. Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. The packet ring buffer still honors `packet_buffer`, but its initial deque preallocation is capped at 8192 entries to avoid large upfront allocations.
+
 ### `[pipeline]`
 
 | Key                | Type | Default | Description                                                                                        |
@@ -146,6 +148,8 @@ When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `fa
 | `enabled`          | bool | `false` | Enable the sharded pipeline for multi-core processing.                                             |
 | `workers`          | int  | `0`     | Number of worker threads. 0 = auto-detect (half of CPU count, clamped 1..8).                       |
 | `channel_capacity` | int  | `4096`  | Bounded channel size per worker shard. When full, packets are dropped (counted as dispatch drops). |
+
+For feature-specific explanations of these settings, see [Web Dashboard](web-dashboard.md), [Sharded Pipeline](pipeline.md), and the other focused guides. This page remains the source of truth for compiled defaults.
 
 ## Minimal Config Example
 

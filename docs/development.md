@@ -10,6 +10,10 @@ netscope/
   README.md                     # Project landing page
   CHANGELOG.md                  # Release history
   docs/                         # Documentation (this directory)
+  scripts/
+    perf/                       # Perf helper scripts and example configs
+  tests/
+    memory_scale_1m.rs          # Ignored large-scale memory validation test
   benches/
     hot_path.rs                 # Criterion benchmarks for parsing, flow, routing
   web/
@@ -22,6 +26,7 @@ netscope/
     config.rs                   # TOML config structs, defaults, deserialization
     display.rs                  # CLI packet display (summary, detail, hex dump)
     flow.rs                     # Flow tracking: keys, entries, TCP state, RTT, export
+    memory.rs                   # RSS estimation and memory-scale helpers
     capture/
       mod.rs                    # Module declaration
       engine.rs                 # libpcap wrapper (open capture, list interfaces)
@@ -41,6 +46,8 @@ netscope/
       router.rs                 # Fast 5-tuple extraction and shard routing
       worker.rs                 # Per-shard worker (parse, flow, anomaly, tick)
       aggregator.rs             # Merges shard ticks, forwards to CLI/web
+      pool.rs                   # Shared reusable packet-buffer pool
+      top_flows.rs              # Streaming heavy-hitter tracker for dashboard top flows
     web/
       mod.rs                    # Module declaration
       server.rs                 # Axum HTTP/WebSocket server, tokio runtime
@@ -67,6 +74,7 @@ Tests are co-located with the source code in `#[cfg(test)]` modules. Key test ar
 - `src/flow.rs` -- also contains the scale-mode flow store (`FlowKeyV4`, `FlowKeyV6`, `ScaleFlowEntry`) and layout regression tests.
 - `src/pipeline/router.rs` -- shard routing correctness (same flow both directions = same shard).
 - `src/protocol/*.rs` -- header parsing, field extraction, edge cases (truncated packets, wrong versions).
+- `tests/memory_scale_1m.rs` -- ignored large-flow-count memory validation.
 
 ## Running Benchmarks
 
@@ -84,6 +92,8 @@ Benchmarks are in `benches/hot_path.rs` using Criterion. They measure:
 Note: `flow_observe (new flow)` includes flow tracker setup and is sensitive to changes like flow table pre-sizing. Use it as a cold-path baseline rather than a steady-state throughput proxy.
 
 HTML reports are generated in `target/criterion/`.
+
+Maintainer perf helper scripts and example replay configs live in `scripts/perf/`.
 
 ## Adding a New Protocol
 
@@ -130,6 +140,14 @@ tracing::info!(interface = %name, "capture started");
 tracing::debug!(error = %e, "parse error on packet #{}", id);
 tracing::trace!(shard, "worker channel full, dropping packet");
 ```
+
+## Docs Maintenance
+
+When changing flags, config defaults, web message shapes, or pipeline behavior, update the matching docs in the same change:
+
+- `docs/cli-reference.md` for CLI changes in `src/cli.rs`
+- `docs/configuration.md` and `netscope.example.toml` for schema/default changes in `src/config.rs`
+- feature guides in `docs/` for behavioral changes in pipeline, flow tracking, anomaly detection, exports, or web code
 
 ## Code Style
 

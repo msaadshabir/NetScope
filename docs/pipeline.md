@@ -58,6 +58,8 @@ Shard routing uses canonical endpoint ordering (always hashing `(min, max)` rega
 
 Set in the `[pipeline]` section of the config file, or via `--pipeline` / `--workers` CLI flags.
 
+For authoritative defaults and the full TOML schema, see [Configuration](configuration.md).
+
 ## Dispatch Drops
 
 When a worker's channel is full, the capture thread drops the packet rather than blocking. This prevents the capture thread from stalling (which would cause kernel-level drops). Dispatch drops are counted and surfaced in both periodic stats ticks and the final summary:
@@ -86,7 +88,7 @@ Each worker emits a partial tick containing its byte/packet counts and top flows
 - Top flows are merged across shards and re-sorted globally.
 - The tick interval is paced by the web tick cadence, not indefinitely gated by an idle shard.
 
-In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (clamped to a minimum of 16ms). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls. The aggregator also enforces a short deadline slightly above `web.tick_ms` and will merge whatever shards have reported by then to avoid idle-shard gating.
+In pipeline mode, the per-shard tick cadence is controlled by `web.tick_ms` (minimum 16ms; see `WebConfig::MIN_TICK_MS` in `src/config.rs`). Workers use a short `recv_timeout` so they can emit ticks even during traffic lulls. The aggregator also enforces a small extra deadline (`tick_ms + 5ms`) and will merge whatever shards have reported by then to avoid idle-shard gating.
 
 ## Shutdown Behavior
 

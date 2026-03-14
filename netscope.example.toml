@@ -62,7 +62,7 @@ bind = "127.0.0.1"
 port = 8080
 tick_ms = 1000
 top_n = 10
-packet_buffer = 2000
+packet_buffer = 2000   # packet-store preallocation is internally capped at 8192
 sample_rate = 1
 payload_bytes = 256
 

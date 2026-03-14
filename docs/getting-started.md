@@ -88,6 +88,8 @@ sudo netscope --web --quiet
 
 Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.
 
+For dashboard endpoints, live update behavior, and tuning guidance, see [Web Dashboard](web-dashboard.md).
+
 ## Supported Protocols
 
 | Layer     | Protocols                               |
@@ -106,4 +108,5 @@ Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-pac
 - [Usage Examples](usage.md) -- Common recipes and workflows.
 - [CLI Reference](cli-reference.md) -- Full list of flags and options.
 - [Configuration](configuration.md) -- TOML config file for persistent settings.
+- [Web Dashboard](web-dashboard.md) -- Endpoints, live update behavior, and tuning.
 - [Troubleshooting](troubleshooting.md) -- Common setup and runtime issues.

@@ -2,6 +2,8 @@
 
 NetScope is designed for high-throughput packet processing. This page covers benchmark results, how to run benchmarks, and tuning guidance.
 
+For authoritative defaults referenced by the tuning examples here, see [Configuration](configuration.md) and `src/config.rs`.
+
 ## Optimizations
 
 The hot path uses several performance-focused design choices:
@@ -80,6 +82,7 @@ immediate_mode = true
 ### Reducing web dashboard load
 
 - Increase `sample_rate` (e.g., `sample_rate = 10` sends every 10th packet).
+- `sample_rate` is capture-wide in both inline and pipeline modes, so increasing it reduces total packet samples rather than samples per shard.
 - Reduce `top_n` (fewer flows per tick).
 - Increase `tick_ms` (less frequent stats updates). Use `33` for roughly 30fps when you want smooth live updates.
 - Reduce `payload_bytes` (smaller hex dumps per packet).
