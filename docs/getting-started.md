@@ -25,6 +25,8 @@ cargo build --release
 
 The binary is at `target/release/netscope`.
 
+This page focuses on first-run setup. For additional workflows, see [Usage Examples](usage.md). If you hit a problem during setup or capture, see [Troubleshooting](troubleshooting.md).
+
 ## Permissions
 
 Live packet capture requires access to network interfaces, which typically means **root / sudo** on Linux and macOS.
@@ -104,3 +106,4 @@ Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-pac
 - [Usage Examples](usage.md) -- Common recipes and workflows.
 - [CLI Reference](cli-reference.md) -- Full list of flags and options.
 - [Configuration](configuration.md) -- TOML config file for persistent settings.
+- [Troubleshooting](troubleshooting.md) -- Common setup and runtime issues.

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+This page focuses on common problems after initial setup. For install steps, first-run commands, and permission setup, see [Getting Started](getting-started.md).
+
 ## Permission Errors
 
 **Symptom:** `error: pcap error: ...permission denied` or `no interfaces found`.
@@ -9,18 +11,17 @@
 **Fix:**
 
 ```bash
-# Run with sudo
+# Quickest fix
 sudo netscope
-
-# Or grant capabilities on Linux (persistent)
-sudo setcap cap_net_raw=eip target/release/netscope
 ```
+
+If you want a persistent Linux capability-based setup instead of running with `sudo`, see [Getting Started](getting-started.md#permissions).
 
 ## No Interfaces Listed
 
 **Symptom:** `--list-interfaces` shows no interfaces.
 
-**Fix:** Run with `sudo`. Without root access, libpcap cannot enumerate interfaces on most systems.
+**Fix:** Run with the same elevated privileges described in [Getting Started](getting-started.md#permissions). Without root access, libpcap cannot enumerate interfaces on most systems.
 
 ## No Packets Captured
 
@@ -113,18 +114,7 @@ NetScope formats timestamps as `HH:MM:SS.microseconds` derived from pcap timesta
 
 ### `pcap.h not found`
 
-Install libpcap development headers:
-
-```bash
-# Debian/Ubuntu
-sudo apt-get install libpcap-dev
-
-# Fedora
-sudo dnf install libpcap-devel
-
-# macOS
-xcode-select --install
-```
+libpcap headers or developer tools are missing. See [Getting Started](getting-started.md#installing-libpcap) for platform-specific installation steps.
 
 ### Rust version too old
 
@@ -133,3 +123,5 @@ NetScope requires Rust 1.85+ (edition 2024). Update with:
 ```bash
 rustup update stable
 ```
+
+See [Getting Started](getting-started.md#prerequisites) for the current baseline toolchain requirements.
