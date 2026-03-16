@@ -4,28 +4,45 @@ All notable changes to NetScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.2.0] - 2026-03-15
 
 ### Added
-
-- Criterion benchmark `handshake_sequence` to measure the combined hot path for a TCP 3-way handshake (SYN -> SYN-ACK -> ACK).
+- Criterion benchmark `handshake_sequence` for TCP 3-way handshake hot path measurement
+- Dashboard usability and performance improvements
+- Synthetic memory benchmark and scale-mode regression fixes
+- Phase 4 scale-mode storage with compact IPv4/IPv6 flow tables
+- Frame sequencing, rAF rendering with performance overlay, and streaming heavy-hitters with exact deltas
+- PCap configuration knobs, buffer pool, drop statistics, and aggregator deadline
+- Pre-sized flow table allocation based on `flow.max_flows` to reduce hash map resizes
+- RTT optimization removing per-call heap allocation by streaming samples from ACK handling
+- Comprehensive documentation updates and .gitignore improvements
 
 ### Changed
-
-- Flow tracking now pre-sizes the flow table based on `flow.max_flows` to reduce hash map resizes during capture.
-- TCP RTT analysis avoids per-call heap allocation by streaming RTT samples from ACK handling without buffering.
-- Flow tracking now switches to a compact scale-mode store with split IPv4/IPv6 tables when RTT, retransmission, and out-of-order analysis are all disabled.
-- Pipeline heavy-hitter candidate tracking now uses the compact internal flow-key path in scale mode.
-- Pipeline-mode web updates now use merged websocket `frame` messages with latest-frame replay on reconnect / lag recovery.
-- Pipeline-mode top-flow reporting now decouples CLI `stats.top_flows` from dashboard `web.top_n`.
-- Updated documentation for performance benchmarks and flow table sizing behavior.
-- Refreshed the docs to reduce overlap between setup, usage, CLI, configuration, and feature guides.
+- Documentation refresh clarifying web, config, and performance sections
+- Updated CLI vs config-only documentation with examples
+- Linked Getting Started and Troubleshooting documentation pages
+- Removed perf-validation documentation (guidance moved to performance.md and scripts/perf/)
+- Closed validation targets and cleaned up related documentation
+- Added documentation for scale-mode flow storage and pipeline operation
+- Batched per-tick events into merged frame messages; decoupled CLI and web top-flows
+- Added documentation for streaming heavy-hitters and performance mode
+- Added capture buffer/immediate options and reordered imports
+- Honored web.tick_ms configuration; removed 500ms clamp, lowered receive timeout, added minimum validation
+- Reformatted documentation tables; removed CONTRIBUTING directory and index.md
+- Flow tracking switches to compact scale-mode store with split IPv4/IPv6 tables when advanced analysis disabled
+- Pipeline heavy-hitter tracking now uses compact internal flow-key path in scale mode
+- Pipeline-mode web updates use merged websocket `frame` messages with latest-frame replay
+- Pipeline-mode top-flow reporting decouples CLI `stats.top_flows` from dashboard `web.top_n`
+- Updated documentation for performance benchmarks and flow table sizing behavior
+- Refreshed documentation to reduce overlap between setup, usage, CLI, configuration, and feature guides
 
 ### Removed
-
 - `CONTRIBUTING.md`
-- `docs/index.md` as it was fully redundant with the main `README.md` documentation table.
-- `docs/perf-validation.md` in favor of keeping evergreen perf guidance in `docs/performance.md` and helper scripts in `scripts/perf/`.
+- `docs/index.md` (fully redundant with main README.md documentation table)
+- `docs/perf-validation.md` (guidance moved to performance.md and scripts/perf/)
+
+## [Unreleased]
+
 
 ## [0.1.0] - 2026-02-27
 
