@@ -2,6 +2,8 @@
 
 This page focuses on common problems after initial setup. For install steps, first-run commands, and permission setup, see [Getting Started](getting-started.md).
 
+Commands below assume `netscope` is on your PATH. If you built from source and did not install it, replace `netscope` with `./target/release/netscope`.
+
 ## Permission Errors
 
 **Symptom:** `error: pcap error: ...permission denied` or `no interfaces found`.

@@ -2,7 +2,7 @@
 
 This page shows common NetScope workflows after initial setup. If you still need to build the binary, install libpcap, or set capture permissions, start with [Getting Started](getting-started.md). For the full flag list, see [CLI Reference](cli-reference.md). For persistent configuration, see [Configuration](configuration.md).
 
-All examples assume the binary is on your PATH as `netscope`. Substitute `netscope` with `sudo cargo run --release --` during development.
+All examples assume the binary is on your PATH as `netscope`. If you built from source and did not install it, replace `netscope` with `./target/release/netscope`.
 
 ## Basic Capture
 

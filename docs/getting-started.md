@@ -16,10 +16,9 @@
 
 ## Building
 
+From the repository root:
+
 ```bash
-# Clone the repository (replace with the actual URL)
-git clone <repo-url>
-cd <repo-dir>
 cargo build --release
 ```
 
@@ -36,7 +35,7 @@ Live packet capture requires access to network interfaces, which typically means
 sudo ./target/release/netscope
 
 # Or during development
-sudo cargo run --release
+sudo cargo run --release --
 ```
 
 On Linux, you can often avoid running as root by granting the `CAP_NET_RAW` capability (some setups may also require `CAP_NET_ADMIN`):
@@ -53,7 +52,7 @@ sudo setcap cap_net_raw=eip target/release/netscope
 ### List available interfaces
 
 ```bash
-sudo netscope --list-interfaces
+sudo ./target/release/netscope --list-interfaces
 ```
 
 Output:
@@ -69,7 +68,7 @@ lo0                                       127.0.0.1, ::1
 ### Capture on the default interface
 
 ```bash
-sudo netscope
+sudo ./target/release/netscope
 ```
 
 Packets are printed to the terminal as they arrive. Press **Ctrl-C** to stop.
@@ -77,13 +76,13 @@ Packets are printed to the terminal as they arrive. Press **Ctrl-C** to stop.
 ### Capture with a BPF filter
 
 ```bash
-sudo netscope -f "tcp port 443"
+sudo ./target/release/netscope -f "tcp port 443"
 ```
 
 ### Start the web dashboard
 
 ```bash
-sudo netscope --web --quiet
+sudo ./target/release/netscope --web --quiet
 ```
 
 Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.

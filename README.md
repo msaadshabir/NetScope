@@ -51,10 +51,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Fo
 
 ## Notes
 
-- Capture typically requires **root privileges**. The web dashboard binds to `127.0.0.1` by default for security.
-- IPv6 extension headers are not parsed (payload starts after the fixed 40-byte header).
-- IPv4 non-initial fragments are skipped for flow tracking.
-- Timestamps are formatted as `HH:MM:SS.microseconds` from UNIX-epoch UTC capture times.
+- The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
 
 ## License
 

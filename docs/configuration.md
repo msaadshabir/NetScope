@@ -36,7 +36,7 @@ Use [CLI Reference](cli-reference.md) for flag-level help and this page for the 
 
 ## Path Fields
 
-Path fields (`write_pcap`, `export_json`, `export_csv`, `alerts_jsonl`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
+In TOML, path fields (`write_pcap`, `export_json`, `export_csv`, `alerts_jsonl`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
 
 ```toml
 [output]
@@ -54,7 +54,7 @@ export_json = ""    # disabled
 | `promiscuous` | bool   | `true`  | Capture in promiscuous mode.                                     |
 | `snaplen`     | int    | `65535` | Maximum bytes captured per packet.                               |
 | `timeout_ms`  | int    | `100`   | Capture read timeout in milliseconds.                            |
-| `buffer_size_mb` | int | (none)  | libpcap capture buffer size in megabytes. Omit/0 to use libpcap default. |
+| `buffer_size_mb` | int | (none)  | libpcap capture buffer size in megabytes. Omit the key (or set to 0) to use the libpcap default. |
 | `immediate_mode` | bool | `false` | Enable libpcap immediate mode (if supported by your libpcap build). |
 | `filter`      | string | (none)  | BPF filter expression.                                           |
 
@@ -140,6 +140,8 @@ When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `fa
 | `payload_bytes` | int    | `256`         | Maximum raw bytes stored per packet for hex dump display.                           |
 
 These keys apply only when `web.enabled = true`. Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. The packet ring buffer still honors `packet_buffer`, but its initial deque preallocation is capped at 8192 entries to avoid large upfront allocations.
+
+Note: `payload_bytes` limits how many bytes are stored for the web packet detail hex dump (see `build_packet_data` in `src/lib.rs`). It does not change capture `snaplen` or what is written to pcap.
 
 ### `[pipeline]`
 

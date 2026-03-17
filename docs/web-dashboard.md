@@ -11,13 +11,13 @@ Then open <http://127.0.0.1:8080>.
 ## Features
 
 - **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, and alert count.
-- **Time-series chart** -- dual-axis throughput and packet rate history (Chart.js, last 240 data points).
+- **Time-series chart** -- dual-axis throughput and packet rate history.
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.
 - **Packet inspector** -- click any packet to see the full protocol tree (Ethernet, IP, TCP/UDP/ICMP fields) and hex dump, fetched on demand from the server.
 - **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan).
 - **Perf overlay** -- open `/?perf=1` to show dashboard fps, render latency p50/p95/p99, dropped frame count, and estimated client/server clock offset.
-- **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection (2-second retry).
+- **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection.
 - **Merged live frames** -- the server batches each tick, sampled packets, and alerts into one websocket `frame` message and replays the latest frame on reconnect / lag recovery.
 
 ## Endpoints
@@ -28,7 +28,7 @@ Then open <http://127.0.0.1:8080>.
 | `/ws`         | GET    | WebSocket endpoint for real-time data.                               |
 | `/api/health` | GET    | Health check, returns `200 OK`.                                      |
 
-The frontend is embedded into the binary at compile time -- no external files or build steps are needed.
+The dashboard HTML/CSS/JS is embedded into the binary at compile time (no separate frontend build step). The chart library is loaded from a CDN at runtime, so charts may not render in offline environments.
 
 Exact UI details live in the embedded frontend assets under `web/static/index.html`, so presentation-specific behavior is implemented there.
 
@@ -43,7 +43,6 @@ http://127.0.0.1:8080/?perf=1
 In perf mode, the browser:
 
 - estimates clock offset via app-level WebSocket ping/pong,
-- renders stats updates on `requestAnimationFrame` instead of directly inside `onmessage`,
 - computes render latency from `server_ts` to the browser render timestamp, and
 - displays fps, latency percentiles, dropped frame count, and offset in the header.
 
@@ -112,6 +111,8 @@ Clients dedupe merged frames by `frame_seq` so reconnect / lag recovery does not
 These can be set in the `[web]` section of the config file. `--web-bind` and `--web-port` are available as CLI flags; the other keys require a config file.
 
 Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. The packet ring buffer still respects `packet_buffer`, but the underlying deque preallocates at most 8192 entries to avoid large upfront allocations. For authoritative defaults, see [Configuration](configuration.md).
+
+Note: the dashboard stores at most `payload_bytes` per packet for the hex dump in packet detail. This does not affect capture `snaplen` or pcap writing.
 
 ## Tuning for High Traffic
 
