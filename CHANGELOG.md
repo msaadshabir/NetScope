@@ -4,6 +4,13 @@ All notable changes to NetScope will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- Clarified configuration fields and streamlined CLI documentation examples.
+- Restored technical limitations and prerequisites to project documentation.
+- Refined tuning guides regarding web dashboard performance and memory optimization.
+
 ## [0.2.0] - 2026-03-15
 
 ### Added
@@ -40,9 +47,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `CONTRIBUTING.md`
 - `docs/index.md` (fully redundant with main README.md documentation table)
 - `docs/perf-validation.md` (guidance moved to performance.md and scripts/perf/)
-
-## [Unreleased]
-
 
 ## [0.1.0] - 2026-02-27
 
