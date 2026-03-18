@@ -1,5 +1,7 @@
 # Getting Started
 
+Commands below assume `netscope` is on your PATH. If you built from source and did not install it, replace `netscope` with `./target/release/netscope`.
+
 ## Prerequisites
 
 - **Rust 1.85+** (edition 2024). Install via [rustup](https://rustup.rs/).
@@ -32,7 +34,7 @@ Live packet capture requires access to network interfaces, which typically means
 
 ```bash
 # Run directly with sudo
-sudo ./target/release/netscope
+sudo netscope
 
 # Or during development
 sudo cargo run --release --
@@ -42,7 +44,7 @@ On Linux, you can often avoid running as root by granting the `CAP_NET_RAW` capa
 
 ```bash
 sudo setcap cap_net_raw=eip target/release/netscope
-./target/release/netscope   # no sudo needed
+netscope   # no sudo needed
 ```
 
 > **Security note:** NetScope captures raw network traffic. Be mindful of privacy and compliance requirements when running on shared networks. The web dashboard binds to `127.0.0.1` by default to avoid exposing captured data to the network.
@@ -52,7 +54,7 @@ sudo setcap cap_net_raw=eip target/release/netscope
 ### List available interfaces
 
 ```bash
-sudo ./target/release/netscope --list-interfaces
+sudo netscope --list-interfaces
 ```
 
 Output:
@@ -68,7 +70,7 @@ lo0                                       127.0.0.1, ::1
 ### Capture on the default interface
 
 ```bash
-sudo ./target/release/netscope
+sudo netscope
 ```
 
 Packets are printed to the terminal as they arrive. Press **Ctrl-C** to stop.
@@ -76,13 +78,13 @@ Packets are printed to the terminal as they arrive. Press **Ctrl-C** to stop.
 ### Capture with a BPF filter
 
 ```bash
-sudo ./target/release/netscope -f "tcp port 443"
+sudo netscope -f "tcp port 443"
 ```
 
 ### Start the web dashboard
 
 ```bash
-sudo ./target/release/netscope --web --quiet
+sudo netscope --web --quiet
 ```
 
 Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.

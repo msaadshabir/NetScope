@@ -8,11 +8,11 @@ sudo netscope --anomalies --alerts-jsonl alerts.jsonl
 
 ## SYN Flood Detection
 
-Triggers when a destination `(ip, port)` receives an unusually high volume of SYN packets from many distinct sources within a sliding time window.
+Triggers when a destination `(ip, port)` receives a high volume of SYN packets from many distinct sources within a sliding time window.
 
 **Conditions (all must be met):**
 
-1. The number of SYN packets to the target exceeds `syn_threshold` within `window_secs`.
+1. The number of SYN packets to the target is at least `syn_threshold` within `window_secs`.
 2. The SYNs come from at least `unique_src_threshold` unique source IPs.
 
 Only initial SYN packets (SYN flag set, ACK flag not set) are counted. SYN-ACK responses are excluded.
@@ -35,8 +35,8 @@ Triggers when a single source IP contacts an unusually high number of unique des
 
 **Conditions (either triggers an alert):**
 
-1. The source contacts more than `unique_ports_threshold` unique destination ports, OR
-2. The source contacts more than `unique_hosts_threshold` unique destination hosts.
+1. The source contacts at least `unique_ports_threshold` unique destination ports, OR
+2. The source contacts at least `unique_hosts_threshold` unique destination hosts.
 
 Only SYN-only TCP packets and UDP packets are considered. Established TCP connections (packets with ACK set) are excluded.
 
@@ -82,7 +82,7 @@ Alerts appear in the "Alerts" tab of the web dashboard with timestamp, kind, and
 
 After an alert fires for a specific target (SYN flood) or source (port scan), subsequent alerts for the same key are suppressed for `cooldown_secs`. This prevents alert floods during sustained attacks.
 
-Cooldown timers and sliding window state are periodically cleaned up (every 30 seconds) to prevent unbounded memory growth during long captures.
+Cooldown timers and sliding-window state are periodically cleaned up (every 30 seconds) to prevent unbounded memory growth during long captures.
 
 ## Pipeline Mode Caveat
 

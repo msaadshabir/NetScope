@@ -88,7 +88,7 @@ Implementation note: NetScope pre-sizes the internal flow table based on `flow.m
 
 When deep TCP analysis is disabled, flow storage also switches to split compact IPv4/IPv6 key types internally, which reduces per-flow memory overhead in scale-mode captures.
 
-Expiration is checked once per second during packet processing.
+Expiration is checked at most once per second during packet processing.
 
 ## Top Flows
 

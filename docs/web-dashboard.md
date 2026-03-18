@@ -43,6 +43,7 @@ http://127.0.0.1:8080/?perf=1
 In perf mode, the browser:
 
 - estimates clock offset via app-level WebSocket ping/pong,
+- renders stats updates on `requestAnimationFrame` instead of directly inside `onmessage`,
 - computes render latency from `server_ts` to the browser render timestamp, and
 - displays fps, latency percentiles, dropped frame count, and offset in the header.
 

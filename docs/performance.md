@@ -6,18 +6,15 @@ For authoritative defaults referenced by the tuning examples here, see [Configur
 
 ## Optimizations
 
-The hot path uses several performance-focused design choices:
+NetScope uses several performance-focused design choices on the hot path:
 
 - **Zero-copy parsing** -- protocol headers are parsed as views over the original byte slice, with no allocations or copies.
-- **ahash** -- `AHashMap` and `AHashSet` replace `std::HashMap` in the flow table and anomaly detector maps, reducing per-lookup hashing cost.
-- **Partial top-N selection** -- uses `select_nth_unstable_by` to partition the top-N elements in O(F) time, then sorts only that slice. Avoids a full O(F log F) sort of the entire flow table each tick.
-- **Streaming heavy-hitters for web ticks** -- pipeline workers use a fixed-size SpaceSaving-style tracker to keep top-flow candidate selection bounded per packet, then resolve exact deltas only for those candidates before sending the dashboard payload.
-- **Merged websocket frames** -- the web server batches each tick with sampled packets and alerts into one live frame, reducing websocket wakeups and making lag recovery resend the latest state instead of replaying backlog.
-- **Minimal shard routing** -- the capture thread extracts the 5-tuple from raw packet bytes at fixed offsets (no full protocol parse) to keep the dispatch path as lean as possible.
-- **Lock-free workers** -- each pipeline worker owns its own `FlowTracker` and `AnomalyDetector`, eliminating contention on the hot path.
-- **Bounded channels** -- crossbeam bounded channels provide backpressure without allocations on the fast path.
-- **Flow table pre-sizing** -- `FlowTracker` reserves hash map capacity based on `flow.max_flows` to avoid rehashing/resizes during steady-state capture.
-- **Scale-mode storage** -- when RTT, retransmission, and out-of-order analysis are all disabled, `FlowTracker` switches to compact split IPv4/IPv6 flow tables backed by `ScaleFlowEntry`, avoiding TCP sequence-tracker allocation in that mode.
+- **Fast hashing** -- hot-path flow/anomaly maps use `ahash` (`AHashMap`/`AHashSet`) to reduce per-lookup hashing cost.
+- **Partial top-N selection** -- uses `select_nth_unstable_by` to partition the top-N elements in O(F) time, then sorts only that slice.
+- **Pipeline sharding (optional)** -- in `--pipeline` mode, each worker owns its own `FlowTracker` and `AnomalyDetector`, avoiding shared hot-path contention.
+- **Web tick batching** -- the web server ships one merged frame per tick (stats + sampled packets + alerts) and resyncs lagged clients by sending only the latest frame.
+- **Pipeline top-flows fast path** -- workers use a fixed-size SpaceSaving-style tracker to choose a bounded candidate set, then recompute exact deltas for those candidates before building the dashboard payload.
+- **Scale-mode flow storage** -- when `analysis.rtt = false`, `analysis.retrans = false`, and `analysis.out_of_order = false`, flow tracking switches to compact split IPv4/IPv6 tables (`ScaleFlowEntry`) to reduce per-flow memory overhead.
 
 ## Benchmark Results
 
@@ -44,15 +41,15 @@ cargo bench
 
 This runs the Criterion benchmarks defined in `benches/hot_path.rs`. Results are written to `target/criterion/` with HTML reports.
 
-For repeatable replay-based throughput or web checks, maintainer helper scripts and example configs live in `scripts/perf/`.
+For repeatable end-to-end checks (pcap replay throughput, web dashboard fps/latency, etc.), see `scripts/perf/`.
 
 To run a specific benchmark:
 
 ```bash
-cargo bench -- parse_packet
-cargo bench -- flow_observe
-cargo bench -- shard_routing
-cargo bench -- handshake_sequence
+cargo bench --bench hot_path -- parse_packet
+cargo bench --bench hot_path -- flow_observe
+cargo bench --bench hot_path -- shard_routing
+cargo bench --bench hot_path -- handshake_sequence
 ```
 
 ## Tuning Checklist
@@ -60,6 +57,7 @@ cargo bench -- handshake_sequence
 ### Reducing kernel drops
 
 - Use a BPF filter (`-f "..."`) to reduce the volume of traffic entering the capture pipeline.
+- Reduce `--snaplen` when you only need headers (smaller packets = less copy/parse work and less memory bandwidth used per packet copied to userspace).
 - Increase libpcap buffer size via config: `capture.buffer_size_mb = 8` (or higher for bursty traffic).
 - Consider `capture.immediate_mode = true` (best-effort; depends on libpcap support).
 - Enable pipeline mode (`--pipeline`) to parallelize processing.
@@ -82,6 +80,7 @@ immediate_mode = true
 ### Reducing web dashboard load
 
 - Increase `sample_rate` (e.g., `sample_rate = 10` sends every 10th packet).
+- Set `sample_rate = 0` to disable the live packet feed.
 - `sample_rate` is capture-wide in both inline and pipeline modes, so increasing it reduces total packet samples rather than samples per shard.
 - Reduce `top_n` (fewer flows per tick).
 - Increase `tick_ms` (less frequent stats updates). Use `33` for roughly 30fps when you want smooth live updates.
@@ -109,7 +108,7 @@ This prints insertion time, estimated RSS, and a pass/fail check against the 500
 For a test-target workflow, run the long ignored test:
 
 ```bash
-cargo test --release -- --ignored memory_scale_1m
+cargo test --release memory_scale_1m -- --ignored --nocapture
 ```
 
 ### CPU usage
