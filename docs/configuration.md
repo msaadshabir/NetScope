@@ -139,7 +139,7 @@ When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `fa
 | `sample_rate`   | int    | `1`           | Send every Nth packet to the UI. Set to 0 to disable the live packet feed entirely. |
 | `payload_bytes` | int    | `256`         | Maximum raw bytes stored per packet for hex dump display.                           |
 
-These keys apply only when `web.enabled = true`. Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. The packet ring buffer still honors `packet_buffer`, but its initial deque preallocation is capped at 8192 entries to avoid large upfront allocations.
+These keys apply only when `web.enabled = true`. Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. Packet detail storage is keyed by packet id, so lookups remain stable even if pipeline events arrive slightly out of order.
 
 Note: `payload_bytes` limits how many bytes are stored for the web packet detail hex dump (see `build_packet_data` in `src/lib.rs`). It does not change capture `snaplen` or what is written to pcap.
 
