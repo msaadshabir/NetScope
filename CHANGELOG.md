@@ -6,10 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- `--list-interfaces` no longer depends on successfully loading a config file.
+- Web packet detail lookups are resilient to out-of-order `PacketStored` events in pipeline mode.
+- Pipeline aggregator waits for all shard shutdown snapshots before exiting (prevents incomplete exports on Ctrl-C).
+- Web ingest flushes buffered packet samples/alerts on shutdown to avoid dropping the final partial interval.
+- Static file handler returns 404 for unknown `/api/*` paths instead of serving the SPA fallback.
+- IPv6 shard routing walks common extension headers so flows consistently hash to the same shard.
+
 ### Changed
 - Clarified configuration fields and streamlined CLI documentation examples.
 - Restored technical limitations and prerequisites to project documentation.
 - Refined tuning guides regarding web dashboard performance and memory optimization.
+- Pcap output now flushes periodically and on shutdown; flush failures abort capture instead of silently continuing.
 
 ## [0.2.0] - 2026-03-15
 
