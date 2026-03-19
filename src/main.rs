@@ -29,6 +29,12 @@ fn main() {
         .with_target(false)
         .init();
 
+    // Handle --list-interfaces
+    if args.list_interfaces {
+        list_interfaces();
+        return;
+    }
+
     let config = match load_config(&args) {
         Ok(config) => config,
         Err(err) => {
@@ -36,12 +42,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-
-    // Handle --list-interfaces
-    if args.list_interfaces {
-        list_interfaces();
-        return;
-    }
 
     // Set up Ctrl-C handler
     let running = Arc::new(AtomicBool::new(true));
