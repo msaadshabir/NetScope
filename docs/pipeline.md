@@ -34,7 +34,7 @@ flowchart TD
 ### How It Works
 
 1. **Capture thread** reads raw packets from libpcap on the main thread.
-2. **Shard routing** extracts the 5-tuple (protocol, src IP, src port, dst IP, dst port) from raw bytes at fixed offsets -- no full parse required. The hash determines which worker receives the packet: `shard = hash(5-tuple) % num_workers`.
+2. **Shard routing** extracts the 5-tuple (protocol, src IP, src port, dst IP, dst port) from raw bytes with lightweight header walking (including common IPv6 extension headers) -- no full parse required. The hash determines which worker receives the packet: `shard = hash(5-tuple) % num_workers`.
 3. **Workers** each own their own `FlowTracker` and `AnomalyDetector`. Parsing, flow tracking, TCP analysis, and anomaly detection all happen lock-free within each shard.
 4. **Aggregator** collects per-shard tick data, merges it into global statistics, and forwards events to the CLI and web dashboard.
 5. **Web server** batches each merged tick with sampled packets and alerts into a single websocket `frame`, and replays the latest frame after reconnect or lag recovery.

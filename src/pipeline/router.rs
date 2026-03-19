@@ -90,11 +90,69 @@ fn hash_ipv6(data: &[u8], offset: usize) -> u64 {
         return byte_hash(data);
     }
 
-    let next_header = data[offset + 6];
+    let mut next_header = data[offset + 6];
     let src_ip = &data[offset + 8..offset + 24];
     let dst_ip = &data[offset + 24..offset + 40];
 
-    let transport_offset = offset + 40;
+    let mut transport_offset = offset + 40;
+    let mut extension_headers_remaining = 8usize;
+
+    while extension_headers_remaining > 0 {
+        match next_header {
+            // Hop-by-Hop, Routing, Destination Options, Mobility, HIP, Shim6
+            0 | 43 | 60 | 135 | 139 | 140 => {
+                if data.len() < transport_offset + 2 {
+                    return byte_hash(data);
+                }
+                let hdr_next = data[transport_offset];
+                let hdr_ext_len = data[transport_offset + 1] as usize;
+                let header_len = (hdr_ext_len + 1) * 8;
+                if data.len() < transport_offset + header_len {
+                    return byte_hash(data);
+                }
+                next_header = hdr_next;
+                transport_offset += header_len;
+            }
+            // Fragment
+            44 => {
+                if data.len() < transport_offset + 8 {
+                    return byte_hash(data);
+                }
+                let hdr_next = data[transport_offset];
+                let fragment_field =
+                    u16::from_be_bytes([data[transport_offset + 2], data[transport_offset + 3]]);
+                let fragment_offset_units = fragment_field >> 3;
+                next_header = hdr_next;
+                transport_offset += 8;
+                if fragment_offset_units != 0 {
+                    break;
+                }
+            }
+            // Authentication Header
+            51 => {
+                if data.len() < transport_offset + 2 {
+                    return byte_hash(data);
+                }
+                let hdr_next = data[transport_offset];
+                let payload_len_words = data[transport_offset + 1] as usize;
+                let header_len = (payload_len_words + 2) * 4;
+                if data.len() < transport_offset + header_len {
+                    return byte_hash(data);
+                }
+                next_header = hdr_next;
+                transport_offset += header_len;
+            }
+            // ESP or No Next Header
+            50 | 59 => {
+                break;
+            }
+            _ => {
+                break;
+            }
+        }
+        extension_headers_remaining -= 1;
+    }
+
     let (src_port, dst_port) = extract_ports(data, transport_offset, next_header);
 
     let mut hasher = ahash::AHasher::default();
@@ -195,5 +253,52 @@ mod tests {
     fn short_packet_no_panic() {
         let shard = shard_for_packet(&[0x08, 0x00], 4);
         assert!(shard < 4);
+    }
+
+    fn make_tcp_ipv6_frame_with_hop_by_hop(
+        src_ip: [u8; 16],
+        dst_ip: [u8; 16],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        // Ethernet + IPv6 fixed header + Hop-by-Hop(8 bytes) + TCP(20 bytes)
+        let mut frame = vec![0u8; 14 + 40 + 8 + 20];
+
+        // Ethernet ethertype 0x86DD
+        frame[12] = 0x86;
+        frame[13] = 0xDD;
+
+        let ipv6 = 14;
+        frame[ipv6] = 0x60; // Version 6
+                            // payload length = 8 + 20
+        frame[ipv6 + 4..ipv6 + 6].copy_from_slice(&(28u16).to_be_bytes());
+        frame[ipv6 + 6] = 0; // Next Header = Hop-by-Hop options
+        frame[ipv6 + 7] = 64; // Hop limit
+        frame[ipv6 + 8..ipv6 + 24].copy_from_slice(&src_ip);
+        frame[ipv6 + 24..ipv6 + 40].copy_from_slice(&dst_ip);
+
+        let hop = ipv6 + 40;
+        frame[hop] = 6; // Next Header = TCP
+        frame[hop + 1] = 0; // Hdr Ext Len = 0 => 8 bytes total
+
+        let tcp = hop + 8;
+        frame[tcp..tcp + 2].copy_from_slice(&src_port.to_be_bytes());
+        frame[tcp + 2..tcp + 4].copy_from_slice(&dst_port.to_be_bytes());
+
+        frame
+    }
+
+    #[test]
+    fn ipv6_extension_headers_preserve_bidirectional_shard() {
+        let src = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let dst = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+        let frame_ab = make_tcp_ipv6_frame_with_hop_by_hop(src, dst, 12345, 443);
+        let frame_ba = make_tcp_ipv6_frame_with_hop_by_hop(dst, src, 443, 12345);
+
+        let shard_ab = shard_for_packet(&frame_ab, 8);
+        let shard_ba = shard_for_packet(&frame_ba, 8);
+
+        assert_eq!(shard_ab, shard_ba);
     }
 }
