@@ -2,7 +2,7 @@
 //! statistics, and forwards results to the CLI and web dashboard.
 
 use crossbeam_channel::Receiver;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -84,7 +84,6 @@ pub fn run(
     rx: Receiver<WorkerEvent>,
     handle: AggregatorHandle,
     web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
-    running: &AtomicBool,
     max_top_n: usize,
     web_top_n: usize,
     stats: Arc<PipelineStats>,
@@ -181,10 +180,6 @@ pub fn run(
                     }
 
                     tick_start = Instant::now();
-                }
-                if !running.load(Ordering::Relaxed) {
-                    drain_channel(&rx, &handle, &web_event_tx);
-                    break;
                 }
             }
             Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
@@ -342,4 +337,75 @@ fn unix_ms_now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flow::{Endpoint, FlowProtocol};
+    use crate::pipeline::worker::ShardShutdown;
+
+    fn test_snapshot(seed: u16) -> FlowSnapshot {
+        FlowSnapshot {
+            protocol: FlowProtocol::Tcp,
+            endpoint_a: Endpoint {
+                ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+                port: seed,
+            },
+            endpoint_b: Endpoint {
+                ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 2)),
+                port: 80,
+            },
+            first_seen: 1.0,
+            last_seen: 2.0,
+            duration_secs: 1.0,
+            packets_a_to_b: 1,
+            packets_b_to_a: 0,
+            bytes_a_to_b: 100,
+            bytes_b_to_a: 0,
+            packets_total: 1,
+            bytes_total: 100,
+            avg_bps: 800.0,
+            tcp_state: None,
+            client: None,
+            retransmissions: 0,
+            out_of_order: 0,
+            rtt_last_ms: None,
+            rtt_min_ms: None,
+            rtt_ewma_ms: None,
+            rtt_samples: 0,
+        }
+    }
+
+    #[test]
+    fn collects_all_shutdown_snapshots_before_exit() {
+        let (tx, rx) = crossbeam_channel::unbounded::<WorkerEvent>();
+        let handle = AggregatorHandle::new(2);
+        let stats = Arc::new(PipelineStats::new());
+        let thread_handle = handle.clone();
+
+        let join = std::thread::spawn(move || {
+            run(rx, thread_handle, None, 0, 0, stats, 10);
+        });
+
+        tx.send(WorkerEvent::Shutdown(ShardShutdown {
+            shard_id: 0,
+            flows: vec![test_snapshot(1001)],
+        }))
+        .unwrap();
+        tx.send(WorkerEvent::Shutdown(ShardShutdown {
+            shard_id: 1,
+            flows: vec![test_snapshot(1002)],
+        }))
+        .unwrap();
+        drop(tx);
+
+        join.join().unwrap();
+
+        let snapshots = handle.take_final_snapshots();
+        assert_eq!(snapshots.len(), 2);
+        let mut ports: Vec<u16> = snapshots.iter().map(|f| f.endpoint_a.port).collect();
+        ports.sort_unstable();
+        assert_eq!(ports, vec![1001, 1002]);
+    }
 }

@@ -201,7 +201,6 @@ pub fn spawn(
 
     // Spawn aggregator.
     let web_event_tx = web_handle.map(|h| h.event_tx.clone());
-    let agg_running = running.clone();
     let agg_handle = aggregator::AggregatorHandle::new(num_workers);
     let agg_handle_clone = agg_handle.clone();
     let max_top_n = (config.stats.top_flows as usize).max(config.web.top_n);
@@ -220,7 +219,6 @@ pub fn spawn(
                 agg_rx,
                 agg_handle_clone,
                 web_event_tx,
-                &agg_running,
                 max_top_n,
                 web_top_n,
                 stats_clone,
