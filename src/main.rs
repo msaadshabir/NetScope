@@ -4,8 +4,8 @@ use netscope::{analysis, capture, config, display, flow, memory, pipeline, proto
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 fn main() {
@@ -214,6 +214,29 @@ fn run_capture(
     Ok(())
 }
 
+const SAVEFILE_FLUSH_INTERVAL_PACKETS: u64 = 1024;
+
+fn write_packet_to_savefile(
+    savefile: &mut Option<&mut pcap::Savefile>,
+    packet: &pcap::Packet<'_>,
+    packet_count: u64,
+) -> Result<(), pcap::Error> {
+    if let Some(file) = savefile.as_mut() {
+        file.write(packet);
+        if packet_count % SAVEFILE_FLUSH_INTERVAL_PACKETS == 0 {
+            file.flush()?;
+        }
+    }
+    Ok(())
+}
+
+fn flush_savefile(savefile: &mut Option<&mut pcap::Savefile>) -> Result<(), pcap::Error> {
+    if let Some(file) = savefile.as_mut() {
+        file.flush()?;
+    }
+    Ok(())
+}
+
 /// Original single-threaded capture loop (no pipeline).
 fn run_capture_inline(
     config: &RuntimeConfig,
@@ -272,8 +295,9 @@ fn run_capture_inline(
             let raw_data = packet.data;
             let wire_len = packet.header.len as u64;
 
-            if let Some(file) = savefile.as_mut() {
-                file.write(&packet);
+            if let Err(err) = write_packet_to_savefile(&mut savefile, &packet, packet_count) {
+                tracing::error!(error = %err, "pcap write error");
+                return Err(Box::new(err));
             }
 
             // Parse the packet
@@ -455,6 +479,11 @@ fn run_capture_inline(
         }
     }
 
+    if let Err(err) = flush_savefile(&mut savefile) {
+        tracing::error!(error = %err, "pcap flush error");
+        return Err(Box::new(err));
+    }
+
     // Print summary
     println!();
     println!("{}", "=".repeat(50));
@@ -544,8 +573,9 @@ fn run_capture_pipeline(
             let wire_len = packet.header.len as u64;
 
             // Write to pcap file (still on capture thread — fast sequential I/O)
-            if let Some(file) = savefile.as_mut() {
-                file.write(&packet);
+            if let Err(err) = write_packet_to_savefile(&mut savefile, &packet, packet_count) {
+                tracing::error!(error = %err, "pcap write error");
+                return Err(Box::new(err));
             }
 
             // Determine shard and dispatch
@@ -599,6 +629,11 @@ fn run_capture_pipeline(
             }
             stats_last = now;
         }
+    }
+
+    if let Err(err) = flush_savefile(&mut savefile) {
+        tracing::error!(error = %err, "pcap flush error");
+        return Err(Box::new(err));
     }
 
     // Shut down the pipeline and collect final snapshots

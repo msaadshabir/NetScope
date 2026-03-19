@@ -55,6 +55,19 @@ Possible causes:
 - **Not enough workers** -- Increase `--workers`.
 - **Uneven shard distribution** -- Some 5-tuples may hash to the same shard. This is expected with a small number of active flows. Use a BPF filter to reduce volume.
 
+## Capture Stops With Pcap Write Error
+
+**Symptom:** Capture exits with an error like `pcap write error` or `pcap flush error` while `--write-pcap` is enabled.
+
+**Cause:** NetScope now treats pcap write/flush failures as fatal to avoid silent output corruption or data loss.
+
+**Fixes:**
+
+1. Ensure the output path exists and is writable.
+2. Verify there is enough free disk space (`df -h`).
+3. Capture to a faster or local filesystem.
+4. Disable `--write-pcap` if raw packet archiving is not required.
+
 ## Web Dashboard Not Reachable
 
 **Symptom:** Browser shows "connection refused" at `http://127.0.0.1:8080`.

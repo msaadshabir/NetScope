@@ -155,18 +155,7 @@ async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>)
                     packets: std::mem::take(&mut pending_packets),
                     alerts: std::mem::take(&mut pending_alerts),
                 };
-                let msg = WsServerMsg::Frame(frame);
-                if let Ok(json) = serde_json::to_string(&msg) {
-                    let frame = BroadcastFrame {
-                        frame_seq: Some(frame_seq),
-                        json: Arc::<str>::from(json),
-                    };
-                    {
-                        let mut latest = state.latest_frame.lock().await;
-                        *latest = Some(frame.clone());
-                    }
-                    let _ = state.broadcast_tx.send(frame);
-                }
+                broadcast_frame(&state, frame_seq, frame).await;
             }
             CaptureEvent::Packet(sample) => {
                 pending_packets.push(sample);
@@ -179,6 +168,38 @@ async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>)
                 pending_alerts.push(alert);
             }
         }
+    }
+
+    // Flush buffered live events on shutdown so the last partial interval isn't lost.
+    for sample in pending_packets {
+        broadcast_message(&state, WsServerMsg::PacketSample(sample)).await;
+    }
+    for alert in pending_alerts {
+        broadcast_message(&state, WsServerMsg::Alert(alert)).await;
+    }
+}
+
+async fn broadcast_frame(state: &Arc<AppState>, frame_seq: u64, frame: Frame) {
+    let msg = WsServerMsg::Frame(frame);
+    if let Ok(json) = serde_json::to_string(&msg) {
+        let frame = BroadcastFrame {
+            frame_seq: Some(frame_seq),
+            json: Arc::<str>::from(json),
+        };
+        {
+            let mut latest = state.latest_frame.lock().await;
+            *latest = Some(frame.clone());
+        }
+        let _ = state.broadcast_tx.send(frame);
+    }
+}
+
+async fn broadcast_message(state: &Arc<AppState>, msg: WsServerMsg) {
+    if let Ok(json) = serde_json::to_string(&msg) {
+        let _ = state.broadcast_tx.send(BroadcastFrame {
+            frame_seq: None,
+            json: Arc::<str>::from(json),
+        });
     }
 }
 
@@ -331,6 +352,13 @@ fn should_skip_frame(frame_seq: Option<u64>, last_sent_frame_seq: Option<u64>) -
 async fn static_handler(uri: Uri) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
 
+    if path == "api" || path.starts_with("api/") {
+        return Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(axum::body::Body::from("not found"))
+            .unwrap();
+    }
+
     // Try the exact path first, then fall back to index.html (SPA)
     if let Some(content) = Assets::get(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -339,7 +367,16 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             .header(header::CONTENT_TYPE, mime.as_ref())
             .body(axum::body::Body::from(content.data.to_vec()))
             .unwrap()
-    } else if let Some(content) = Assets::get("index.html") {
+    } else if should_serve_spa(path) {
+        let content = match Assets::get("index.html") {
+            Some(content) => content,
+            None => {
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(axum::body::Body::from("not found"))
+                    .unwrap();
+            }
+        };
         Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -351,4 +388,8 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             .body(axum::body::Body::from("not found"))
             .unwrap()
     }
+}
+
+fn should_serve_spa(path: &str) -> bool {
+    path.is_empty() || !path.contains('.')
 }
