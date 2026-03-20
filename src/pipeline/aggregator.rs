@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use crate::flow::{FlowDelta, FlowSnapshot};
 use crate::web::messages::{CaptureEvent, FlowInfo, StatsTick};
 
-use super::worker::{ShardTick, WorkerEvent};
+use super::worker::{ShardShutdown, ShardTick, WorkerEvent};
 use super::PipelineStats;
 
 /// Aggregated tick data merged from all shards.
@@ -41,7 +41,7 @@ struct AggregatorState {
     /// Accumulated alert count.
     alert_count: u64,
     /// Per-shard final snapshots collected on shutdown.
-    shard_snapshots: Vec<Vec<FlowSnapshot>>,
+    shard_snapshots: Vec<Option<Vec<FlowSnapshot>>>,
 }
 
 impl AggregatorHandle {
@@ -51,7 +51,7 @@ impl AggregatorHandle {
                 num_workers,
                 latest_tick: None,
                 alert_count: 0,
-                shard_snapshots: Vec::new(),
+                shard_snapshots: vec![None; num_workers],
             })),
         }
     }
@@ -72,7 +72,8 @@ impl AggregatorHandle {
         let mut all: Vec<FlowSnapshot> = state
             .shard_snapshots
             .drain(..)
-            .flat_map(|v| v.into_iter())
+            .flatten()
+            .flat_map(|flows| flows.into_iter())
             .collect();
         all.sort_by(|a, b| b.bytes_total.cmp(&a.bytes_total));
         all
@@ -156,7 +157,7 @@ pub fn run(
                 }
                 WorkerEvent::Shutdown(shutdown) => {
                     let mut state = handle.inner.lock().unwrap();
-                    state.shard_snapshots.push(shutdown.flows);
+                    record_shutdown_snapshot(&mut state, shutdown);
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
@@ -207,7 +208,7 @@ fn drain_channel(
         match event {
             WorkerEvent::Shutdown(shutdown) => {
                 let mut state = handle.inner.lock().unwrap();
-                state.shard_snapshots.push(shutdown.flows);
+                record_shutdown_snapshot(&mut state, shutdown);
             }
             WorkerEvent::Alert(alert) => {
                 {
@@ -234,6 +235,23 @@ fn drain_channel(
             WorkerEvent::ShardTick(_) => {}
         }
     }
+}
+
+fn record_shutdown_snapshot(state: &mut AggregatorState, shutdown: ShardShutdown) {
+    if shutdown.shard_id >= state.shard_snapshots.len() {
+        state
+            .shard_snapshots
+            .resize_with(shutdown.shard_id + 1, || None);
+    }
+
+    if state.shard_snapshots[shutdown.shard_id].is_some() {
+        tracing::debug!(
+            shard = shutdown.shard_id,
+            "duplicate shutdown snapshot received; replacing previous value"
+        );
+    }
+
+    state.shard_snapshots[shutdown.shard_id] = Some(shutdown.flows);
 }
 
 fn merge_ticks(
@@ -407,5 +425,42 @@ mod tests {
         let mut ports: Vec<u16> = snapshots.iter().map(|f| f.endpoint_a.port).collect();
         ports.sort_unstable();
         assert_eq!(ports, vec![1001, 1002]);
+    }
+
+    #[test]
+    fn duplicate_shutdown_snapshot_replaces_same_shard() {
+        let (tx, rx) = crossbeam_channel::unbounded::<WorkerEvent>();
+        let handle = AggregatorHandle::new(2);
+        let stats = Arc::new(PipelineStats::new());
+        let thread_handle = handle.clone();
+
+        let join = std::thread::spawn(move || {
+            run(rx, thread_handle, None, 0, 0, stats, 10);
+        });
+
+        tx.send(WorkerEvent::Shutdown(ShardShutdown {
+            shard_id: 0,
+            flows: vec![test_snapshot(2001)],
+        }))
+        .unwrap();
+        tx.send(WorkerEvent::Shutdown(ShardShutdown {
+            shard_id: 0,
+            flows: vec![test_snapshot(2002)],
+        }))
+        .unwrap();
+        tx.send(WorkerEvent::Shutdown(ShardShutdown {
+            shard_id: 1,
+            flows: vec![test_snapshot(2003)],
+        }))
+        .unwrap();
+        drop(tx);
+
+        join.join().unwrap();
+
+        let snapshots = handle.take_final_snapshots();
+        assert_eq!(snapshots.len(), 2);
+        let mut ports: Vec<u16> = snapshots.iter().map(|f| f.endpoint_a.port).collect();
+        ports.sort_unstable();
+        assert_eq!(ports, vec![2002, 2003]);
     }
 }
