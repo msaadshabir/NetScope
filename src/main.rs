@@ -550,94 +550,100 @@ fn run_capture_pipeline(
     let mut packet_count: u64 = 0;
     let mut stats_last = Instant::now();
 
-    while running.load(Ordering::SeqCst) {
-        if config.run.count > 0 && packet_count >= config.run.count {
-            break;
-        }
-
-        let packet = match cap.next_packet() {
-            Ok(packet) => Some(packet),
-            Err(pcap::Error::TimeoutExpired) => None,
-            Err(e) => {
-                tracing::error!(error = %e, "capture error");
-                return Err(Box::new(e));
-            }
-        };
-
-        if let Some(packet) = packet {
-            packet_count += 1;
-
-            let timestamp =
-                packet.header.ts.tv_sec as f64 + packet.header.ts.tv_usec as f64 / 1_000_000.0;
-            let raw_data = packet.data;
-            let wire_len = packet.header.len as u64;
-
-            // Write to pcap file (still on capture thread — fast sequential I/O)
-            if let Err(err) = write_packet_to_savefile(&mut savefile, &packet, packet_count) {
-                tracing::error!(error = %err, "pcap write error");
-                return Err(Box::new(err));
+    let capture_result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        while running.load(Ordering::SeqCst) {
+            if config.run.count > 0 && packet_count >= config.run.count {
+                break;
             }
 
-            // Determine shard and dispatch
-            let shard = pipeline::router::shard_for_packet(raw_data, num_workers);
-            let mut buf = pipe.buffer_pool.acquire();
-            buf.extend_from_slice(raw_data);
-            let owned = pipeline::OwnedPacket {
-                id: packet_count,
-                ts: timestamp,
-                wire_len,
-                data: buf,
+            let packet = match cap.next_packet() {
+                Ok(packet) => Some(packet),
+                Err(pcap::Error::TimeoutExpired) => None,
+                Err(e) => {
+                    tracing::error!(error = %e, "capture error");
+                    return Err(Box::new(e));
+                }
             };
 
-            match pipe.senders[shard].try_send(owned) {
-                Ok(_) => {}
-                Err(err) => {
-                    pipe.stats.record_dispatch_drop();
-                    let dropped = err.into_inner();
-                    pipe.buffer_pool.release(dropped.data);
-                    tracing::trace!(shard, "worker channel full, dropping packet");
-                }
-            }
-        }
+            if let Some(packet) = packet {
+                packet_count += 1;
 
-        // CLI stats from aggregator
-        let now = Instant::now();
-        if config.stats.enabled
-            && now.duration_since(stats_last).as_millis() as u64 >= config.stats.interval_ms
-        {
-            if let Some(tick) = pipe.aggregator.take_tick() {
-                println!(
-                    "[stats] {:.2} Mbps | {:.0} pps | {} flows | drops={} (total={})",
-                    tick.mbps,
-                    tick.pps,
-                    tick.active_flows,
-                    tick.dispatch_drops,
-                    tick.dispatch_drops_total
-                );
-                if config.stats.top_flows > 0 {
-                    let elapsed = (tick.interval_ms as f64 / 1000.0).max(0.001);
-                    for (rank, (delta, _snap)) in tick
-                        .top_flows
-                        .iter()
-                        .enumerate()
-                        .take(config.stats.top_flows as usize)
-                    {
-                        let mbps = delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
-                        println!("  {}. {} {:.2} Mbps", rank + 1, delta.key, mbps);
+                let timestamp =
+                    packet.header.ts.tv_sec as f64 + packet.header.ts.tv_usec as f64 / 1_000_000.0;
+                let raw_data = packet.data;
+                let wire_len = packet.header.len as u64;
+
+                // Write to pcap file (still on capture thread — fast sequential I/O)
+                if let Err(err) = write_packet_to_savefile(&mut savefile, &packet, packet_count) {
+                    tracing::error!(error = %err, "pcap write error");
+                    return Err(Box::new(err));
+                }
+
+                // Determine shard and dispatch
+                let shard = pipeline::router::shard_for_packet(raw_data, num_workers);
+                let mut buf = pipe.buffer_pool.acquire();
+                buf.extend_from_slice(raw_data);
+                let owned = pipeline::OwnedPacket {
+                    id: packet_count,
+                    ts: timestamp,
+                    wire_len,
+                    data: buf,
+                };
+
+                match pipe.senders[shard].try_send(owned) {
+                    Ok(_) => {}
+                    Err(err) => {
+                        pipe.stats.record_dispatch_drop();
+                        let dropped = err.into_inner();
+                        pipe.buffer_pool.release(dropped.data);
+                        tracing::trace!(shard, "worker channel full, dropping packet");
                     }
                 }
             }
-            stats_last = now;
+
+            // CLI stats from aggregator
+            let now = Instant::now();
+            if config.stats.enabled
+                && now.duration_since(stats_last).as_millis() as u64 >= config.stats.interval_ms
+            {
+                if let Some(tick) = pipe.aggregator.take_tick() {
+                    println!(
+                        "[stats] {:.2} Mbps | {:.0} pps | {} flows | drops={} (total={})",
+                        tick.mbps,
+                        tick.pps,
+                        tick.active_flows,
+                        tick.dispatch_drops,
+                        tick.dispatch_drops_total
+                    );
+                    if config.stats.top_flows > 0 {
+                        let elapsed = (tick.interval_ms as f64 / 1000.0).max(0.001);
+                        for (rank, (delta, _snap)) in tick
+                            .top_flows
+                            .iter()
+                            .enumerate()
+                            .take(config.stats.top_flows as usize)
+                        {
+                            let mbps = delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
+                            println!("  {}. {} {:.2} Mbps", rank + 1, delta.key, mbps);
+                        }
+                    }
+                }
+                stats_last = now;
+            }
         }
-    }
 
-    if let Err(err) = flush_savefile(&mut savefile) {
-        tracing::error!(error = %err, "pcap flush error");
-        return Err(Box::new(err));
-    }
+        if let Err(err) = flush_savefile(&mut savefile) {
+            tracing::error!(error = %err, "pcap flush error");
+            return Err(Box::new(err));
+        }
 
-    // Shut down the pipeline and collect final snapshots
+        Ok(())
+    })();
+
+    // Always shut down worker/aggregator threads before returning, including
+    // capture/savefile error paths.
     pipe.shutdown();
+    capture_result?;
 
     // Print summary
     println!();
