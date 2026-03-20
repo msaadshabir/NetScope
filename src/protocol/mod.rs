@@ -71,6 +71,7 @@ pub enum IpProtocol {
     Tcp,
     Udp,
     Icmpv6,
+    Fragment,
     Unknown(u8),
 }
 
@@ -80,6 +81,7 @@ impl From<u8> for IpProtocol {
             1 => IpProtocol::Icmp,
             6 => IpProtocol::Tcp,
             17 => IpProtocol::Udp,
+            44 => IpProtocol::Fragment,
             58 => IpProtocol::Icmpv6,
             other => IpProtocol::Unknown(other),
         }
@@ -93,6 +95,7 @@ impl fmt::Display for IpProtocol {
             IpProtocol::Tcp => write!(f, "TCP"),
             IpProtocol::Udp => write!(f, "UDP"),
             IpProtocol::Icmpv6 => write!(f, "ICMPv6"),
+            IpProtocol::Fragment => write!(f, "IPv6-Fragment"),
             IpProtocol::Unknown(v) => write!(f, "Proto({})", v),
         }
     }

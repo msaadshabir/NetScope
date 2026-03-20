@@ -6,6 +6,8 @@
 
 use std::hash::{Hash, Hasher};
 
+use crate::protocol::ipv6::locate_ipv6_payload;
+
 /// Compute the shard index for a raw Ethernet frame.
 ///
 /// Returns `shard = hash(5-tuple) % num_shards`. Falls back to a simple
@@ -85,75 +87,27 @@ fn hash_ipv4(data: &[u8], offset: usize) -> u64 {
 
 #[inline]
 fn hash_ipv6(data: &[u8], offset: usize) -> u64 {
-    // IPv6 fixed header: 40 bytes. src (offset+8..24), dst (offset+24..40), next_header (offset+6)
+    // IPv6 fixed header: 40 bytes. src (offset+8..24), dst (offset+24..40)
     if data.len() < offset + 40 {
         return byte_hash(data);
     }
 
-    let mut next_header = data[offset + 6];
     let src_ip = &data[offset + 8..offset + 24];
     let dst_ip = &data[offset + 24..offset + 40];
 
-    let mut transport_offset = offset + 40;
-    let mut extension_headers_remaining = 8usize;
+    let payload_info = match locate_ipv6_payload(&data[offset..]) {
+        Some(info) => info,
+        None => return byte_hash(data),
+    };
 
-    while extension_headers_remaining > 0 {
-        match next_header {
-            // Hop-by-Hop, Routing, Destination Options, Mobility, HIP, Shim6
-            0 | 43 | 60 | 135 | 139 | 140 => {
-                if data.len() < transport_offset + 2 {
-                    return byte_hash(data);
-                }
-                let hdr_next = data[transport_offset];
-                let hdr_ext_len = data[transport_offset + 1] as usize;
-                let header_len = (hdr_ext_len + 1) * 8;
-                if data.len() < transport_offset + header_len {
-                    return byte_hash(data);
-                }
-                next_header = hdr_next;
-                transport_offset += header_len;
-            }
-            // Fragment
-            44 => {
-                if data.len() < transport_offset + 8 {
-                    return byte_hash(data);
-                }
-                let hdr_next = data[transport_offset];
-                let fragment_field =
-                    u16::from_be_bytes([data[transport_offset + 2], data[transport_offset + 3]]);
-                let fragment_offset_units = fragment_field >> 3;
-                next_header = hdr_next;
-                transport_offset += 8;
-                if fragment_offset_units != 0 {
-                    break;
-                }
-            }
-            // Authentication Header
-            51 => {
-                if data.len() < transport_offset + 2 {
-                    return byte_hash(data);
-                }
-                let hdr_next = data[transport_offset];
-                let payload_len_words = data[transport_offset + 1] as usize;
-                let header_len = (payload_len_words + 2) * 4;
-                if data.len() < transport_offset + header_len {
-                    return byte_hash(data);
-                }
-                next_header = hdr_next;
-                transport_offset += header_len;
-            }
-            // ESP or No Next Header
-            50 | 59 => {
-                break;
-            }
-            _ => {
-                break;
-            }
-        }
-        extension_headers_remaining -= 1;
-    }
-
-    let (src_port, dst_port) = extract_ports(data, transport_offset, next_header);
+    let next_header = payload_info.next_header;
+    let transport_offset = offset + payload_info.transport_offset;
+    let (src_port, dst_port) = if payload_info.non_initial_fragment {
+        // Non-initial fragments do not contain transport ports.
+        (0, 0)
+    } else {
+        extract_ports(data, transport_offset, next_header)
+    };
 
     let mut hasher = ahash::AHasher::default();
     next_header.hash(&mut hasher);
@@ -295,6 +249,49 @@ mod tests {
 
         let frame_ab = make_tcp_ipv6_frame_with_hop_by_hop(src, dst, 12345, 443);
         let frame_ba = make_tcp_ipv6_frame_with_hop_by_hop(dst, src, 443, 12345);
+
+        let shard_ab = shard_for_packet(&frame_ab, 8);
+        let shard_ba = shard_for_packet(&frame_ba, 8);
+
+        assert_eq!(shard_ab, shard_ba);
+    }
+
+    fn make_ipv6_non_initial_fragment(
+        src_ip: [u8; 16],
+        dst_ip: [u8; 16],
+        fragment_id: u32,
+    ) -> Vec<u8> {
+        // Ethernet + IPv6 fixed header + Fragment(8) + fragment payload(12)
+        let mut frame = vec![0u8; 14 + 40 + 8 + 12];
+
+        frame[12] = 0x86;
+        frame[13] = 0xDD;
+
+        let ipv6 = 14;
+        frame[ipv6] = 0x60;
+        frame[ipv6 + 4..ipv6 + 6].copy_from_slice(&(20u16).to_be_bytes());
+        frame[ipv6 + 6] = 44; // Fragment
+        frame[ipv6 + 7] = 64;
+        frame[ipv6 + 8..ipv6 + 24].copy_from_slice(&src_ip);
+        frame[ipv6 + 24..ipv6 + 40].copy_from_slice(&dst_ip);
+
+        let frag = ipv6 + 40;
+        frame[frag] = 6; // Encapsulated next header = TCP
+                         // fragment offset = 1 (non-initial fragment)
+        let fragment_field = 1u16 << 3;
+        frame[frag + 2..frag + 4].copy_from_slice(&fragment_field.to_be_bytes());
+        frame[frag + 4..frag + 8].copy_from_slice(&fragment_id.to_be_bytes());
+
+        frame
+    }
+
+    #[test]
+    fn ipv6_non_initial_fragments_are_bidirectional_stable() {
+        let src = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let dst = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+        let frame_ab = make_ipv6_non_initial_fragment(src, dst, 1234);
+        let frame_ba = make_ipv6_non_initial_fragment(dst, src, 1234);
 
         let shard_ab = shard_for_packet(&frame_ab, 8);
         let shard_ba = shard_for_packet(&frame_ba, 8);

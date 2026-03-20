@@ -907,9 +907,10 @@ impl FlowTracker {
                 let skip = hdr.fragment_offset() != 0;
                 (ParsedFlowIps::V4(hdr.src_addr(), hdr.dst_addr()), skip)
             }
-            Some(NetworkHeader::Ipv6(hdr)) => {
-                (ParsedFlowIps::V6(hdr.src_addr(), hdr.dst_addr()), false)
-            }
+            Some(NetworkHeader::Ipv6(hdr)) => (
+                ParsedFlowIps::V6(hdr.src_addr(), hdr.dst_addr()),
+                hdr.is_non_initial_fragment(),
+            ),
             None => return,
         };
 
@@ -1585,8 +1586,8 @@ impl FlowKey {
 
 /// Build a canonical flow key from a parsed packet.
 ///
-/// Returns `None` for packets that are not trackable flows (non-IP, fragmented
-/// IPv4 packets, or unsupported transport protocols).
+/// Returns `None` for packets that are not trackable flows (non-IP,
+/// non-initial fragments, or unsupported transport protocols).
 pub fn flow_key_from_packet(packet: &ParsedPacket<'_>) -> Option<FlowKey> {
     let (src_ip, dst_ip, skip_flow) = match &packet.network {
         Some(NetworkHeader::Ipv4(hdr)) => {
@@ -1596,7 +1597,7 @@ pub fn flow_key_from_packet(packet: &ParsedPacket<'_>) -> Option<FlowKey> {
         Some(NetworkHeader::Ipv6(hdr)) => (
             IpAddr::V6(hdr.src_addr()),
             IpAddr::V6(hdr.dst_addr()),
-            false,
+            hdr.is_non_initial_fragment(),
         ),
         None => return None,
     };
@@ -1860,7 +1861,7 @@ fn tcp_sequence_len(
                 }
             }
             NetworkHeader::Ipv6(hdr) => {
-                let payload_len = hdr.payload_length() as usize;
+                let payload_len = hdr.payload().len();
                 if payload_len >= header.header_len() {
                     let tcp_payload = payload_len - header.header_len();
                     len = tcp_payload as u32;

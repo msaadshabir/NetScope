@@ -34,7 +34,7 @@ pub fn maybe_analyze_anomaly(
         Some(protocol::NetworkHeader::Ipv6(hdr)) => (
             std::net::IpAddr::V6(hdr.src_addr()),
             std::net::IpAddr::V6(hdr.dst_addr()),
-            false,
+            hdr.is_non_initial_fragment(),
         ),
         None => return Vec::new(),
     };
