@@ -120,7 +120,7 @@ Note: `sample_rate = 0` disables live packet samples only; stats and alerts can 
 
 1. **No flows tracked** -- Only TCP and UDP traffic creates flow entries. ICMP does not.
 2. **All flows expired** -- If capture runs long enough with `flow.timeout_secs` set low, flows may expire before export.
-3. **Fragmented traffic** -- IPv4 non-initial fragments are skipped for flow tracking.
+3. **Fragmented traffic** -- IPv4 and IPv6 non-initial fragments are skipped for flow tracking.
 
 ## Timestamps Show Wrong Time
 

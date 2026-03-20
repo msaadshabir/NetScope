@@ -101,8 +101,8 @@ For dashboard endpoints, live update behavior, and tuning guidance, see [Web Das
 
 **Known limitations:**
 
-- IPv6 extension headers are not parsed; payload starts after the fixed 40-byte header.
-- IPv4 non-initial fragments are skipped for flow tracking (the transport header is only present in the first fragment).
+- IPv6 extension-header parsing is intentionally limited to common headers (bounded-depth walk) and may not fully decode uncommon chains.
+- IPv4 and IPv6 non-initial fragments are skipped for flow tracking (the transport header is only present in the first fragment).
 
 ## Next Steps
 

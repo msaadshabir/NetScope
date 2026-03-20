@@ -10,15 +10,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--list-interfaces` no longer depends on successfully loading a config file.
 - Web packet detail lookups are resilient to out-of-order `PacketStored` events in pipeline mode.
 - Pipeline aggregator waits for all shard shutdown snapshots before exiting (prevents incomplete exports on Ctrl-C).
+- Pipeline aggregator stores final snapshots by shard id and replaces duplicate shutdown snapshots deterministically.
 - Web ingest flushes buffered packet samples/alerts on shutdown to avoid dropping the final partial interval.
 - Static file handler returns 404 for unknown `/api/*` paths instead of serving the SPA fallback.
 - IPv6 shard routing walks common extension headers so flows consistently hash to the same shard.
+- Pipeline capture now always shuts down worker/aggregator threads before returning, including pcap write/flush error paths.
+- IPv6 non-initial fragments are no longer treated as transport-bearing packets for flow/anomaly tracking and shard port hashing.
 
 ### Changed
 - Clarified configuration fields and streamlined CLI documentation examples.
 - Restored technical limitations and prerequisites to project documentation.
 - Refined tuning guides regarding web dashboard performance and memory optimization.
 - Pcap output now flushes periodically and on shutdown; flush failures abort capture instead of silently continuing.
+- IPv6 parsing now walks common extension headers to expose the effective transport protocol and payload offset.
+- Packet detail store now uses fixed-size O(1) slot storage keyed by packet id modulo capacity, with stale-id rejection outside the active window.
 
 ## [0.2.0] - 2026-03-15
 
