@@ -343,6 +343,10 @@ tbody tr.selected { background: #1f3a5f; }
       <div class="label">Alerts</div>
       <div class="value" id="cardAlerts" style="color:var(--yellow)">0</div>
     </div>
+    <div class="card">
+      <div class="label">Kernel Drops</div>
+      <div class="value" id="cardKernelDrops" style="color:var(--orange)">0</div>
+    </div>
   </div>
 
   <!-- Chart panel (top-left) -->
@@ -738,6 +742,14 @@ function renderStatsTick(msg, renderTsMs) {
   }
   if (ui.cardFlows && ui.cardFlows.textContent !== flowsText) {
     ui.cardFlows.textContent = flowsText;
+  }
+  if (ui.cardKernelDrops) {
+    const kernelDropsTotal = Number(msg.kernel_drops_total || 0);
+    const ifDropsTotal = Number(msg.kernel_if_drops_total || 0);
+    const kernelText = `${kernelDropsTotal} / ${ifDropsTotal}`;
+    if (ui.cardKernelDrops.textContent !== kernelText) {
+      ui.cardKernelDrops.textContent = kernelText;
+    }
   }
 
   if (chartData.labels.length === 0 || renderTsMs - lastChartPointAtMs >= CHART_SAMPLE_INTERVAL_MS) {
@@ -1299,6 +1311,7 @@ function cacheUiElements() {
   ui.cardPps = document.getElementById('cardPps');
   ui.cardFlows = document.getElementById('cardFlows');
   ui.cardAlerts = document.getElementById('cardAlerts');
+  ui.cardKernelDrops = document.getElementById('cardKernelDrops');
 
   ui.flowsBody = document.getElementById('flowsBody');
   ui.flowsEmpty = document.getElementById('flowsEmpty');

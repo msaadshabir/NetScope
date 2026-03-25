@@ -33,6 +33,7 @@ use crate::web;
 use crossbeam_channel::{bounded, Sender};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::path::PathBuf;
 use std::thread;
 
 pub use aggregator::AggregatorHandle;
@@ -43,6 +44,44 @@ pub use worker::WorkerEvent;
 pub struct PipelineStats {
     dispatch_drops_total: AtomicU64,
     dispatch_drops_interval: AtomicU64,
+}
+
+#[derive(Debug)]
+pub struct KernelPcapStats {
+    initialized: AtomicBool,
+    dropped_total: AtomicU64,
+    if_dropped_total: AtomicU64,
+}
+
+impl KernelPcapStats {
+    pub fn new() -> Self {
+        KernelPcapStats {
+            initialized: AtomicBool::new(false),
+            dropped_total: AtomicU64::new(0),
+            if_dropped_total: AtomicU64::new(0),
+        }
+    }
+
+    pub fn update_totals(&self, dropped_total: u64, if_dropped_total: u64) {
+        // Store the monotonic totals from pcap. The aggregator computes per-tick
+        // deltas from these totals to avoid interval races.
+        self.dropped_total.store(dropped_total, Ordering::SeqCst);
+        self.if_dropped_total
+            .store(if_dropped_total, Ordering::SeqCst);
+        self.initialized.store(true, Ordering::SeqCst);
+    }
+
+    pub fn initialized(&self) -> bool {
+        self.initialized.load(Ordering::SeqCst)
+    }
+
+    pub fn dropped_total(&self) -> u64 {
+        self.dropped_total.load(Ordering::SeqCst)
+    }
+
+    pub fn if_dropped_total(&self) -> u64 {
+        self.if_dropped_total.load(Ordering::SeqCst)
+    }
 }
 
 impl PipelineStats {
@@ -101,6 +140,12 @@ pub struct PipelineConfig {
     pub web: WebConfig,
     /// Number of heavy-hitter candidates to track per worker tick.
     pub heavy_hitter_top_n: usize,
+    /// Pipeline alert JSONL file sink path.
+    pub alerts_jsonl: Option<PathBuf>,
+    /// Pipeline expired-flow JSONL file sink path.
+    pub expired_flows_jsonl: Option<PathBuf>,
+    /// Shared kernel/libpcap drop counters.
+    pub kernel_stats: Arc<KernelPcapStats>,
 }
 
 /// Handle returned by [`spawn`] — the capture thread uses this to dispatch
@@ -114,6 +159,8 @@ pub struct PipelineHandle {
     pub buffer_pool: PacketBufPool,
     /// Shared counters for pipeline drop statistics.
     pub stats: Arc<PipelineStats>,
+    /// Shared kernel/libpcap drop statistics.
+    pub kernel_stats: Arc<KernelPcapStats>,
     /// Worker join handles (for clean shutdown).
     worker_handles: Vec<thread::JoinHandle<()>>,
     /// Aggregator join handle.
@@ -164,6 +211,8 @@ pub fn spawn(
     let buffer_pool = PacketBufPool::new(config.buffer_pool_capacity, config.packet_buf_size);
     let buffer_returner = buffer_pool.returner();
     let stats = Arc::new(PipelineStats::new());
+    let kernel_stats = config.kernel_stats.clone();
+    let emit_expired_flows = config.expired_flows_jsonl.is_some();
 
     for shard_id in 0..num_workers {
         let (pkt_tx, pkt_rx) = bounded::<OwnedPacket>(config.channel_capacity);
@@ -186,6 +235,7 @@ pub fn spawn(
                     analysis_cfg,
                     web_cfg,
                     heavy_hitter_top_n,
+                    emit_expired_flows,
                     buffer_returner,
                 );
                 w.run(pkt_rx, agg_tx, &running);
@@ -211,6 +261,9 @@ pub fn spawn(
     // for a 33ms tick). Use tick_ms + 5ms as a pragmatic deadline.
     let tick_deadline_ms = config.web.tick_ms.saturating_add(5).max(1);
     let stats_clone = stats.clone();
+    let kernel_stats_clone = kernel_stats.clone();
+    let alerts_jsonl = config.alerts_jsonl.clone();
+    let expired_flows_jsonl = config.expired_flows_jsonl.clone();
 
     let aggregator_thread = thread::Builder::new()
         .name("ns-aggregator".into())
@@ -222,7 +275,10 @@ pub fn spawn(
                 max_top_n,
                 web_top_n,
                 stats_clone,
+                kernel_stats_clone,
                 tick_deadline_ms,
+                alerts_jsonl,
+                expired_flows_jsonl,
             );
         })
         .expect("failed to spawn aggregator thread");
@@ -232,6 +288,7 @@ pub fn spawn(
         aggregator: agg_handle,
         buffer_pool,
         stats,
+        kernel_stats,
         worker_handles,
         aggregator_handle: Some(aggregator_thread),
     }
@@ -242,5 +299,28 @@ pub fn resolve_num_workers(configured: usize) -> usize {
         (num_cpus::get() / 2).clamp(1, 8)
     } else {
         configured.max(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KernelPcapStats;
+
+    #[test]
+    fn kernel_stats_tracks_initialized_and_totals() {
+        let stats = KernelPcapStats::new();
+        assert!(!stats.initialized());
+        assert_eq!(stats.dropped_total(), 0);
+        assert_eq!(stats.if_dropped_total(), 0);
+
+        stats.update_totals(10, 3);
+        assert!(stats.initialized());
+        assert_eq!(stats.dropped_total(), 10);
+        assert_eq!(stats.if_dropped_total(), 3);
+
+        stats.update_totals(15, 5);
+        assert!(stats.initialized());
+        assert_eq!(stats.dropped_total(), 15);
+        assert_eq!(stats.if_dropped_total(), 5);
     }
 }

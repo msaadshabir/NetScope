@@ -128,6 +128,8 @@ pub struct OutputConfig {
     pub export_json: Option<PathBuf>,
     #[serde(deserialize_with = "empty_path_none")]
     pub export_csv: Option<PathBuf>,
+    #[serde(deserialize_with = "empty_path_none")]
+    pub expired_flows_jsonl: Option<PathBuf>,
     pub hex_dump: bool,
     pub quiet: bool,
 }
@@ -138,6 +140,7 @@ impl Default for OutputConfig {
             write_pcap: None,
             export_json: None,
             export_csv: None,
+            expired_flows_jsonl: None,
             hex_dump: false,
             quiet: false,
         }

@@ -4,14 +4,52 @@
 use crossbeam_channel::Receiver;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::flow::{FlowDelta, FlowSnapshot};
-use crate::web::messages::{CaptureEvent, FlowInfo, StatsTick};
+use crate::flow::{ExpiredFlowEvent, FlowDelta, FlowSnapshot};
+use crate::jsonl::JsonlSink;
+use crate::web::messages::{AlertMsg, CaptureEvent, FlowInfo, StatsTick};
 
 use super::worker::{ShardShutdown, ShardTick, WorkerEvent};
-use super::PipelineStats;
+use super::{KernelPcapStats, PipelineStats};
+
+#[derive(Debug, Clone, Copy, Default)]
+struct KernelTickStats {
+    drops: u64,
+    drops_total: u64,
+    if_drops: u64,
+    if_drops_total: u64,
+}
+
+fn kernel_tick_stats(
+    kernel_stats: &KernelPcapStats,
+    prev_totals: &mut Option<(u64, u64)>,
+) -> KernelTickStats {
+    if !kernel_stats.initialized() {
+        return KernelTickStats::default();
+    }
+
+    let dropped_total = kernel_stats.dropped_total();
+    let if_dropped_total = kernel_stats.if_dropped_total();
+
+    let (drops, if_drops) = match prev_totals.replace((dropped_total, if_dropped_total)) {
+        None => (0, 0),
+        Some((prev_dropped, prev_if_dropped)) => (
+            dropped_total.saturating_sub(prev_dropped),
+            if_dropped_total.saturating_sub(prev_if_dropped),
+        ),
+    };
+
+    KernelTickStats {
+        drops,
+        drops_total: dropped_total,
+        if_drops,
+        if_drops_total: if_dropped_total,
+    }
+}
+
 
 /// Aggregated tick data merged from all shards.
 #[derive(Debug, Clone)]
@@ -26,6 +64,10 @@ pub struct AggregatedTick {
     pub top_flows: Vec<(FlowDelta, FlowSnapshot)>,
     pub dispatch_drops: u64,
     pub dispatch_drops_total: u64,
+    pub kernel_drops: u64,
+    pub kernel_drops_total: u64,
+    pub kernel_if_drops: u64,
+    pub kernel_if_drops_total: u64,
 }
 
 /// Shared state the main thread can read for CLI stats / final snapshot.
@@ -88,7 +130,10 @@ pub fn run(
     max_top_n: usize,
     web_top_n: usize,
     stats: Arc<PipelineStats>,
+    kernel_stats: Arc<KernelPcapStats>,
     tick_deadline_ms: u64,
+    alerts_jsonl: Option<PathBuf>,
+    expired_flows_jsonl: Option<PathBuf>,
 ) {
     let num_workers = handle.inner.lock().unwrap().num_workers;
     let frame_seq = AtomicU64::new(0);
@@ -96,6 +141,9 @@ pub fn run(
     // Accumulate partial shard ticks, then merge once all shards have reported.
     let mut pending_ticks: Vec<Option<ShardTick>> = vec![None; num_workers];
     let mut tick_start = Instant::now();
+    let mut alert_sink = open_sink(alerts_jsonl.as_deref(), "alerts jsonl");
+    let mut expired_flow_sink = open_sink(expired_flows_jsonl.as_deref(), "expired flows jsonl");
+    let mut prev_kernel_totals: Option<(u64, u64)> = None;
 
     loop {
         let elapsed_ms = tick_start.elapsed().as_millis() as u64;
@@ -113,7 +161,14 @@ pub fn run(
                     let all_present = pending_ticks.iter().all(|t| t.is_some());
                     if all_present {
                         let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
-                        let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats);
+                        let kstats = kernel_tick_stats(&kernel_stats, &mut prev_kernel_totals);
+                        let merged = merge_ticks(
+                            &mut pending_ticks,
+                            elapsed,
+                            max_top_n,
+                            &stats,
+                            kstats,
+                        );
 
                         // Forward to web dashboard.
                         if let Some(tx) = &web_event_tx {
@@ -149,11 +204,15 @@ pub fn run(
                         let mut state = handle.inner.lock().unwrap();
                         state.alert_count += 1;
                     }
+                    write_alert_to_jsonl(&mut alert_sink, &alert);
                     // Print to CLI
                     println!("[alert] {}", alert.description);
                     if let Some(tx) = &web_event_tx {
                         let _ = tx.try_send(CaptureEvent::Alert(alert));
                     }
+                }
+                WorkerEvent::ExpiredFlows(events) => {
+                    write_expired_flows_to_jsonl(&mut expired_flow_sink, events);
                 }
                 WorkerEvent::Shutdown(shutdown) => {
                     let mut state = handle.inner.lock().unwrap();
@@ -164,7 +223,14 @@ pub fn run(
                 let elapsed_ms = tick_start.elapsed().as_millis() as u64;
                 if elapsed_ms >= tick_deadline_ms && pending_ticks.iter().any(|t| t.is_some()) {
                     let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
-                    let merged = merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats);
+                    let kstats = kernel_tick_stats(&kernel_stats, &mut prev_kernel_totals);
+                    let merged = merge_ticks(
+                        &mut pending_ticks,
+                        elapsed,
+                        max_top_n,
+                        &stats,
+                        kstats,
+                    );
 
                     if let Some(tx) = &web_event_tx {
                         let stats_tick = aggregated_to_stats_tick(
@@ -187,7 +253,13 @@ pub fn run(
                 // All workers have dropped their senders — drain whatever
                 // remains in the channel before exiting so that Shutdown
                 // events (and their flow snapshots) are not lost.
-                drain_channel(&rx, &handle, &web_event_tx);
+                drain_channel(
+                    &rx,
+                    &handle,
+                    &web_event_tx,
+                    &mut alert_sink,
+                    &mut expired_flow_sink,
+                );
                 break;
             }
         }
@@ -203,6 +275,8 @@ fn drain_channel(
     rx: &Receiver<WorkerEvent>,
     handle: &AggregatorHandle,
     web_event_tx: &Option<mpsc::Sender<CaptureEvent>>,
+    alert_sink: &mut Option<JsonlSink>,
+    expired_flow_sink: &mut Option<JsonlSink>,
 ) {
     while let Ok(event) = rx.try_recv() {
         match event {
@@ -215,10 +289,14 @@ fn drain_channel(
                     let mut state = handle.inner.lock().unwrap();
                     state.alert_count += 1;
                 }
+                write_alert_to_jsonl(alert_sink, &alert);
                 println!("[alert] {}", alert.description);
                 if let Some(tx) = web_event_tx {
                     let _ = tx.try_send(CaptureEvent::Alert(alert));
                 }
+            }
+            WorkerEvent::ExpiredFlows(events) => {
+                write_expired_flows_to_jsonl(expired_flow_sink, events);
             }
             WorkerEvent::Packet(sample) => {
                 if let Some(tx) = web_event_tx {
@@ -259,6 +337,7 @@ fn merge_ticks(
     elapsed_secs: f64,
     max_top_n: usize,
     stats: &PipelineStats,
+    kernel: KernelTickStats,
 ) -> AggregatedTick {
     let mut total_bytes: u64 = 0;
     let mut total_packets: u64 = 0;
@@ -299,6 +378,10 @@ fn merge_ticks(
         top_flows: all_top_flows,
         dispatch_drops: stats.take_dispatch_drops_interval(),
         dispatch_drops_total: stats.dispatch_drops_total(),
+        kernel_drops: kernel.drops,
+        kernel_drops_total: kernel.drops_total,
+        kernel_if_drops: kernel.if_drops,
+        kernel_if_drops_total: kernel.if_drops_total,
     }
 }
 
@@ -346,6 +429,10 @@ fn aggregated_to_stats_tick(agg: &AggregatedTick, web_top_n: usize, frame_seq: u
         active_flows: agg.active_flows,
         dispatch_drops: agg.dispatch_drops,
         dispatch_drops_total: agg.dispatch_drops_total,
+        kernel_drops: agg.kernel_drops,
+        kernel_drops_total: agg.kernel_drops_total,
+        kernel_if_drops: agg.kernel_if_drops,
+        kernel_if_drops_total: agg.kernel_if_drops_total,
         top_flows,
     }
 }
@@ -357,11 +444,55 @@ fn unix_ms_now() -> u64 {
         .as_millis() as u64
 }
 
+fn open_sink(path: Option<&std::path::Path>, label: &str) -> Option<JsonlSink> {
+    match path {
+        Some(path) => match JsonlSink::new(path) {
+            Ok(sink) => Some(sink),
+            Err(err) => {
+                eprintln!("{} disabled: {}", label, err);
+                None
+            }
+        },
+        None => None,
+    }
+}
+
+fn write_alert_to_jsonl(sink: &mut Option<JsonlSink>, alert: &AlertMsg) {
+    let record = serde_json::json!({
+        "ts": alert.ts,
+        "kind": &alert.kind,
+        "description": &alert.description,
+    });
+    if let Some(sink) = sink.as_mut() {
+        if let Err(err) = sink.write(&record) {
+            eprintln!("alert write error: {}", err);
+            return;
+        }
+        if let Err(err) = sink.flush() {
+            eprintln!("alert flush error: {}", err);
+        }
+    }
+}
+
+fn write_expired_flows_to_jsonl(sink: &mut Option<JsonlSink>, events: Vec<ExpiredFlowEvent>) {
+    if let Some(sink) = sink.as_mut() {
+        for event in events {
+            if let Err(err) = sink.write(&event) {
+                eprintln!("expired flow write error: {}", err);
+            }
+        }
+        if let Err(err) = sink.flush() {
+            eprintln!("expired flow flush error: {}", err);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::{Endpoint, FlowProtocol};
     use crate::pipeline::worker::ShardShutdown;
+    use crate::pipeline::KernelPcapStats;
 
     fn test_snapshot(seed: u16) -> FlowSnapshot {
         FlowSnapshot {
@@ -400,10 +531,11 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded::<WorkerEvent>();
         let handle = AggregatorHandle::new(2);
         let stats = Arc::new(PipelineStats::new());
+        let kernel_stats = Arc::new(KernelPcapStats::new());
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(rx, thread_handle, None, 0, 0, stats, 10);
+            run(rx, thread_handle, None, 0, 0, stats, kernel_stats, 10, None, None);
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {
@@ -432,10 +564,11 @@ mod tests {
         let (tx, rx) = crossbeam_channel::unbounded::<WorkerEvent>();
         let handle = AggregatorHandle::new(2);
         let stats = Arc::new(PipelineStats::new());
+        let kernel_stats = Arc::new(KernelPcapStats::new());
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(rx, thread_handle, None, 0, 0, stats, 10);
+            run(rx, thread_handle, None, 0, 0, stats, kernel_stats, 10, None, None);
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {

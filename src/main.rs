@@ -6,7 +6,7 @@ use netscope::{build_packet_data, maybe_analyze_anomaly};
 use clap::Parser;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 fn main() {
     let args = cli::Cli::parse();
@@ -215,6 +215,7 @@ fn run_capture(
 }
 
 const SAVEFILE_FLUSH_INTERVAL_PACKETS: u64 = 1024;
+const LIVE_PCAP_STATS_POLL_INTERVAL_MS: u64 = 250;
 
 fn write_packet_to_savefile(
     savefile: &mut Option<&mut pcap::Savefile>,
@@ -235,6 +236,116 @@ fn flush_savefile(savefile: &mut Option<&mut pcap::Savefile>) -> Result<(), pcap
         file.flush()?;
     }
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct InlineKernelStats {
+    dropped_total: u64,
+    if_dropped_total: u64,
+    dropped_interval_stats: u64,
+    if_dropped_interval_stats: u64,
+    dropped_interval_web: u64,
+    if_dropped_interval_web: u64,
+    initialized: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PcapDropSnapshot {
+    dropped_total: u64,
+    if_dropped_total: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PcapDropDelta {
+    dropped: u64,
+    if_dropped: u64,
+}
+
+impl InlineKernelStats {
+    fn update_totals(&mut self, dropped_total: u64, if_dropped_total: u64) {
+        let dropped_delta = if self.initialized {
+            dropped_total.saturating_sub(self.dropped_total)
+        } else {
+            0
+        };
+        let if_dropped_delta = if self.initialized {
+            if_dropped_total.saturating_sub(self.if_dropped_total)
+        } else {
+            0
+        };
+        self.dropped_total = dropped_total;
+        self.if_dropped_total = if_dropped_total;
+        self.dropped_interval_stats = self.dropped_interval_stats.saturating_add(dropped_delta);
+        self.if_dropped_interval_stats = self
+            .if_dropped_interval_stats
+            .saturating_add(if_dropped_delta);
+        self.dropped_interval_web = self.dropped_interval_web.saturating_add(dropped_delta);
+        self.if_dropped_interval_web = self.if_dropped_interval_web.saturating_add(if_dropped_delta);
+        self.initialized = true;
+    }
+
+    fn take_stats_interval(&mut self) -> (u64, u64) {
+        let dropped = self.dropped_interval_stats;
+        let if_dropped = self.if_dropped_interval_stats;
+        self.dropped_interval_stats = 0;
+        self.if_dropped_interval_stats = 0;
+        (dropped, if_dropped)
+    }
+
+    fn take_web_interval(&mut self) -> (u64, u64) {
+        let dropped = self.dropped_interval_web;
+        let if_dropped = self.if_dropped_interval_web;
+        self.dropped_interval_web = 0;
+        self.if_dropped_interval_web = 0;
+        (dropped, if_dropped)
+    }
+}
+
+fn maybe_poll_live_pcap_stats(
+    cap: &mut pcap::Capture<pcap::Active>,
+    last_poll: &mut Instant,
+) -> Option<(u64, u64)> {
+    let now = Instant::now();
+    if (now.duration_since(*last_poll).as_millis() as u64) < LIVE_PCAP_STATS_POLL_INTERVAL_MS {
+        return None;
+    }
+    *last_poll = now;
+
+    match cap.stats() {
+        Ok(stats) => Some((stats.dropped as u64, stats.if_dropped as u64)),
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to read live pcap stats");
+            None
+        }
+    }
+}
+
+#[inline]
+fn unix_secs_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+}
+
+fn flush_expired_flows_jsonl(
+    sink: &mut Option<netscope::jsonl::JsonlSink>,
+    events: &mut Vec<flow::ExpiredFlowEvent>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    let drained = std::mem::take(events);
+    if let Some(sink) = sink.as_mut() {
+        for event in drained {
+            if let Err(err) = sink.write(&event) {
+                eprintln!("expired flow write error: {}", err);
+            }
+        }
+        if let Err(err) = sink.flush() {
+            eprintln!("expired flow flush error: {}", err);
+        }
+    }
 }
 
 /// Original single-threaded capture loop (no pipeline).
@@ -260,10 +371,26 @@ fn run_capture_inline(
         config.analysis.anomalies.clone(),
         config.analysis.alerts_jsonl.as_deref(),
     );
+    let mut expired_flow_sink = match config.output.expired_flows_jsonl.as_deref() {
+        Some(path) => match netscope::jsonl::JsonlSink::new(path) {
+            Ok(sink) => Some(sink),
+            Err(err) => {
+                eprintln!("expired flow file disabled: {}", err);
+                None
+            }
+        },
+        None => None,
+    };
+    let mut expired_flow_events: Vec<flow::ExpiredFlowEvent> = Vec::new();
+    let mut last_expire_check_ts: f64 = 0.0;
 
     let mut stats_last = Instant::now();
     let mut stats_bytes: u64 = 0;
     let mut stats_packets: u64 = 0;
+    let mut kernel_stats = InlineKernelStats::default();
+    let mut live_stats_poll_last = Instant::now()
+        .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
+        .unwrap_or_else(Instant::now);
 
     // Web dashboard tick state
     let mut web_tick_last = Instant::now();
@@ -374,7 +501,36 @@ fn run_capture_inline(
             web_tick_bytes += wire_len;
             web_tick_packets += 1;
 
-            flow_tracker.maybe_expire(timestamp);
+            if timestamp < last_expire_check_ts {
+                last_expire_check_ts = timestamp;
+            } else if (timestamp - last_expire_check_ts) >= 1.0 {
+                last_expire_check_ts = timestamp;
+                if expired_flow_sink.is_some() {
+                    flow_tracker.maybe_expire_collect(timestamp, &mut expired_flow_events);
+                    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
+                } else {
+                    flow_tracker.maybe_expire(timestamp);
+                }
+            }
+        } else {
+            let now_ts = unix_secs_now();
+            if now_ts < last_expire_check_ts {
+                last_expire_check_ts = now_ts;
+            } else if (now_ts - last_expire_check_ts) >= 1.0 {
+                last_expire_check_ts = now_ts;
+                if expired_flow_sink.is_some() {
+                    flow_tracker.maybe_expire_collect(now_ts, &mut expired_flow_events);
+                    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
+                } else {
+                    flow_tracker.maybe_expire(now_ts);
+                }
+            }
+        }
+
+        if let Some((dropped_total, if_dropped_total)) =
+            maybe_poll_live_pcap_stats(cap, &mut live_stats_poll_last)
+        {
+            kernel_stats.update_totals(dropped_total, if_dropped_total);
         }
 
         // Stats printing
@@ -386,9 +542,20 @@ fn run_capture_inline(
             let mbps = stats_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
             let pps = stats_packets as f64 / elapsed;
             let active_flows = flow_tracker.len();
+            let (kernel_drops, kernel_if_drops) = kernel_stats.take_stats_interval();
+            let kernel_snapshot = PcapDropSnapshot {
+                dropped_total: kernel_stats.dropped_total,
+                if_dropped_total: kernel_stats.if_dropped_total,
+            };
             println!(
-                "[stats] {:.2} Mbps | {:.0} pps | {} flows",
-                mbps, pps, active_flows
+                "[stats] {:.2} Mbps | {:.0} pps | {} flows | kdrop={} (total={}) ifdrop={} (total={})",
+                mbps,
+                pps,
+                active_flows,
+                kernel_drops,
+                kernel_snapshot.dropped_total,
+                kernel_if_drops,
+                kernel_snapshot.if_dropped_total
             );
 
             if config.stats.top_flows > 0 {
@@ -440,6 +607,15 @@ fn run_capture_inline(
                         }
                     })
                     .collect();
+                let (kernel_drops, kernel_if_drops) = kernel_stats.take_web_interval();
+                let kernel_snapshot = PcapDropSnapshot {
+                    dropped_total: kernel_stats.dropped_total,
+                    if_dropped_total: kernel_stats.if_dropped_total,
+                };
+                let kernel_delta = PcapDropDelta {
+                    dropped: kernel_drops,
+                    if_dropped: kernel_if_drops,
+                };
 
                 let tick = web::messages::StatsTick {
                     ts: std::time::SystemTime::now()
@@ -459,6 +635,10 @@ fn run_capture_inline(
                     active_flows,
                     dispatch_drops: 0,
                     dispatch_drops_total: 0,
+                    kernel_drops: kernel_delta.dropped,
+                    kernel_drops_total: kernel_snapshot.dropped_total,
+                    kernel_if_drops: kernel_delta.if_dropped,
+                    kernel_if_drops_total: kernel_snapshot.if_dropped_total,
                     top_flows,
                 };
 
@@ -478,6 +658,8 @@ fn run_capture_inline(
             }
         }
     }
+
+    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
 
     if let Err(err) = flush_savefile(&mut savefile) {
         tracing::error!(error = %err, "pcap flush error");
@@ -529,6 +711,7 @@ fn run_capture_pipeline(
         s if s > 0 => s as usize,
         _ => 65535,
     };
+    let kernel_stats = Arc::new(pipeline::KernelPcapStats::new());
 
     let pipeline_cfg = pipeline::PipelineConfig {
         num_workers: config.pipeline.workers,
@@ -540,6 +723,9 @@ fn run_capture_pipeline(
         stats: config.stats.clone(),
         web: config.web.clone(),
         heavy_hitter_top_n: config.web.top_n.max(config.stats.top_flows as usize),
+        alerts_jsonl: config.analysis.alerts_jsonl.clone(),
+        expired_flows_jsonl: config.output.expired_flows_jsonl.clone(),
+        kernel_stats: kernel_stats.clone(),
     };
 
     let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle);
@@ -549,6 +735,10 @@ fn run_capture_pipeline(
 
     let mut packet_count: u64 = 0;
     let mut stats_last = Instant::now();
+    let mut final_kernel_stats: Option<(u64, u64)> = None;
+    let mut live_stats_poll_last = Instant::now()
+        .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
+        .unwrap_or_else(Instant::now);
 
     let capture_result = (|| -> Result<(), Box<dyn std::error::Error>> {
         while running.load(Ordering::SeqCst) {
@@ -601,6 +791,12 @@ fn run_capture_pipeline(
                 }
             }
 
+            if let Some((dropped_total, if_dropped_total)) =
+                maybe_poll_live_pcap_stats(cap, &mut live_stats_poll_last)
+            {
+                kernel_stats.update_totals(dropped_total, if_dropped_total);
+            }
+
             // CLI stats from aggregator
             let now = Instant::now();
             if config.stats.enabled
@@ -608,12 +804,16 @@ fn run_capture_pipeline(
             {
                 if let Some(tick) = pipe.aggregator.take_tick() {
                     println!(
-                        "[stats] {:.2} Mbps | {:.0} pps | {} flows | drops={} (total={})",
+                        "[stats] {:.2} Mbps | {:.0} pps | {} flows | drops={} (total={}) | kdrop={} (total={}) ifdrop={} (total={})",
                         tick.mbps,
                         tick.pps,
                         tick.active_flows,
                         tick.dispatch_drops,
-                        tick.dispatch_drops_total
+                        tick.dispatch_drops_total,
+                        tick.kernel_drops,
+                        tick.kernel_drops_total,
+                        tick.kernel_if_drops,
+                        tick.kernel_if_drops_total
                     );
                     if config.stats.top_flows > 0 {
                         let elapsed = (tick.interval_ms as f64 / 1000.0).max(0.001);
@@ -637,8 +837,14 @@ fn run_capture_pipeline(
             return Err(Box::new(err));
         }
 
+        final_kernel_stats = Some((kernel_stats.dropped_total(), kernel_stats.if_dropped_total()));
+
         Ok(())
     })();
+
+    if final_kernel_stats.is_none() {
+        final_kernel_stats = Some((kernel_stats.dropped_total(), kernel_stats.if_dropped_total()));
+    }
 
     // Always shut down worker/aggregator threads before returning, including
     // capture/savefile error paths.
@@ -651,6 +857,10 @@ fn run_capture_pipeline(
     println!("Capture complete (pipeline mode).");
     println!("  Packets captured:  {}", packet_count);
     println!("  Dispatch drops:    {}", pipe.stats.dispatch_drops_total());
+    if let Some((kernel_dropped, if_dropped)) = final_kernel_stats {
+        println!("  Kernel dropped:    {}", kernel_dropped);
+        println!("  Interface dropped: {}", if_dropped);
+    }
 
     // Export flows from aggregated shard snapshots (shutdown() joins all
     // worker threads, so snapshots are guaranteed to be present).
@@ -737,6 +947,13 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
             analysis.alerts_jsonl = None;
         } else {
             analysis.alerts_jsonl = Some(value.clone());
+        }
+    }
+    if let Some(value) = &args.expired_flows_jsonl {
+        if value.as_os_str().is_empty() {
+            output.expired_flows_jsonl = None;
+        } else {
+            output.expired_flows_jsonl = Some(value.clone());
         }
     }
 

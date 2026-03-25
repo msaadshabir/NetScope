@@ -1,9 +1,8 @@
 use crate::config::{AnomalyConfig, PortScanConfig, SynFloodConfig};
 use crate::flow::{Endpoint, FlowProtocol};
+use crate::jsonl::JsonlSink;
 use ahash::{AHashMap, AHashSet};
 use std::collections::VecDeque;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::net::IpAddr;
 
 #[derive(Debug, Clone, Copy)]
@@ -105,14 +104,13 @@ impl AnomalyDetector {
 
 #[derive(Debug)]
 struct AlertSink {
-    writer: BufWriter<File>,
+    sink: JsonlSink,
 }
 
 impl AlertSink {
     fn new(path: &std::path::Path) -> Result<Self, std::io::Error> {
-        let file = File::create(path)?;
         Ok(AlertSink {
-            writer: BufWriter::new(file),
+            sink: JsonlSink::new(path)?,
         })
     }
 
@@ -122,10 +120,8 @@ impl AlertSink {
             "kind": alert.kind.as_str(),
             "description": &alert.description,
         });
-        let line = serde_json::to_string(&record)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-        writeln!(self.writer, "{}", line)?;
-        self.writer.flush()
+        self.sink.write(&record)?;
+        self.sink.flush()
     }
 }
 

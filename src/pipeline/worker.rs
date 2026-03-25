@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::analysis::anomaly::AnomalyDetector;
 use crate::config::{AnalysisConfig, FlowConfig, WebConfig};
-use crate::flow::{FlowDelta, FlowSnapshot, FlowTracker};
+use crate::flow::{ExpiredFlowEvent, FlowDelta, FlowSnapshot, FlowTracker};
 use crate::protocol;
 use crate::web::messages::{AlertMsg, PacketSample, StoredPacket};
 
@@ -25,6 +25,8 @@ pub enum WorkerEvent {
     PacketStored(StoredPacket),
     /// An anomaly alert.
     Alert(AlertMsg),
+    /// Flows expired due to timeout or max-flow eviction.
+    ExpiredFlows(Vec<ExpiredFlowEvent>),
     /// Worker is shutting down; final flow snapshot from this shard.
     Shutdown(ShardShutdown),
 }
@@ -55,6 +57,9 @@ pub struct Worker {
     heavy_hitter_top_n: usize,
     buffer_returner: PacketBufReturner,
     top_flows_hh: SpaceSavingTopFlows,
+    emit_expired_flows: bool,
+    expired_flows_buf: Vec<ExpiredFlowEvent>,
+    last_expire_check_ts: f64,
     // Per-tick accumulators
     tick_bytes: u64,
     tick_packets: u64,
@@ -68,6 +73,7 @@ impl Worker {
         analysis_cfg: AnalysisConfig,
         web_cfg: WebConfig,
         heavy_hitter_top_n: usize,
+        emit_expired_flows: bool,
         buffer_returner: PacketBufReturner,
     ) -> Self {
         let tick_interval = tick_interval_for(&web_cfg);
@@ -93,6 +99,9 @@ impl Worker {
             heavy_hitter_top_n,
             buffer_returner,
             top_flows_hh: SpaceSavingTopFlows::new(heavy_hitter_top_n),
+            emit_expired_flows,
+            expired_flows_buf: Vec::new(),
+            last_expire_check_ts: 0.0,
             tick_bytes: 0,
             tick_packets: 0,
             tick_next: Instant::now() + tick_interval,
@@ -119,6 +128,7 @@ impl Worker {
 
             let now = Instant::now();
             if now >= self.tick_next {
+                self.expire_idle_flows(&agg_tx);
                 self.emit_tick_at(&agg_tx, now);
                 continue;
             }
@@ -129,7 +139,9 @@ impl Worker {
                     let owned = std::mem::take(&mut pkt.data);
                     self.buffer_returner.release(owned);
                 }
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    self.expire_idle_flows(&agg_tx);
+                }
                 Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
             }
 
@@ -139,6 +151,7 @@ impl Worker {
 
         // Final tick flush.
         self.emit_tick(&agg_tx);
+        self.flush_expired_flows(&agg_tx);
 
         // Send shutdown event with final flow snapshot.
         let flows = self.flow_tracker.snapshot();
@@ -197,8 +210,19 @@ impl Worker {
                     let _ = agg_tx.send(WorkerEvent::PacketStored(stored));
                 }
 
-                // Flow expiration
-                self.flow_tracker.maybe_expire(pkt.ts);
+                // Flow expiration (gate checks to avoid per-packet overhead)
+                if pkt.ts < self.last_expire_check_ts {
+                    self.last_expire_check_ts = pkt.ts;
+                } else if (pkt.ts - self.last_expire_check_ts) >= 1.0 {
+                    self.last_expire_check_ts = pkt.ts;
+                    if self.emit_expired_flows {
+                        self.flow_tracker
+                            .maybe_expire_collect(pkt.ts, &mut self.expired_flows_buf);
+                        self.flush_expired_flows(agg_tx);
+                    } else {
+                        self.flow_tracker.maybe_expire(pkt.ts);
+                    }
+                }
             }
             Err(e) => {
                 tracing::trace!(shard = self.shard_id, error = %e, "parse error");
@@ -240,6 +264,25 @@ impl Worker {
         self.tick_next =
             advance_tick_deadline(self.tick_next, now, tick_interval_for(&self.web_cfg));
     }
+
+    fn expire_idle_flows(&mut self, agg_tx: &Sender<WorkerEvent>) {
+        let now = unix_secs_now();
+        if self.emit_expired_flows {
+            self.flow_tracker
+                .maybe_expire_collect(now, &mut self.expired_flows_buf);
+            self.flush_expired_flows(agg_tx);
+        } else {
+            self.flow_tracker.maybe_expire(now);
+        }
+    }
+
+    fn flush_expired_flows(&mut self, agg_tx: &Sender<WorkerEvent>) {
+        if self.expired_flows_buf.is_empty() {
+            return;
+        }
+        let batch = std::mem::take(&mut self.expired_flows_buf);
+        let _ = agg_tx.send(WorkerEvent::ExpiredFlows(batch));
+    }
 }
 
 #[inline]
@@ -268,6 +311,14 @@ fn advance_tick_deadline(mut tick_next: Instant, now: Instant, tick_interval: Du
             return tick_next;
         }
     }
+}
+
+#[inline]
+fn unix_secs_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
 }
 
 #[cfg(test)]

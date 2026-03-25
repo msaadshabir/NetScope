@@ -19,6 +19,7 @@ count = 0
 write_pcap = ""
 export_json = ""
 export_csv = ""
+expired_flows_jsonl = ""
 hex_dump = false
 quiet = false
 

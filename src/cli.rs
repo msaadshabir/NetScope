@@ -109,6 +109,10 @@ pub struct Cli {
     #[arg(long)]
     pub alerts_jsonl: Option<std::path::PathBuf>,
 
+    /// Write expired flow records as JSON lines
+    #[arg(long)]
+    pub expired_flows_jsonl: Option<std::path::PathBuf>,
+
     /// Enable the web dashboard
     #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_web")]
     pub web: bool,

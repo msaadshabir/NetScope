@@ -734,6 +734,21 @@ pub struct FlowSnapshot {
     pub rtt_samples: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExpiredFlowReason {
+    Timeout,
+    Eviction,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExpiredFlowEvent {
+    pub ts: f64,
+    pub reason: ExpiredFlowReason,
+    #[serde(flatten)]
+    pub flow: FlowSnapshot,
+}
+
 #[derive(Debug, Clone)]
 pub struct FlowDelta {
     pub key: FlowKey,
@@ -1015,22 +1030,61 @@ impl FlowTracker {
     }
 
     pub fn maybe_expire(&mut self, now: f64) -> usize {
+        self.maybe_expire_inner(now, None)
+    }
+
+    pub fn maybe_expire_collect(&mut self, now: f64, out: &mut Vec<ExpiredFlowEvent>) -> usize {
+        self.maybe_expire_inner(now, Some(out))
+    }
+
+    fn maybe_expire_inner(
+        &mut self,
+        now: f64,
+        mut out: Option<&mut Vec<ExpiredFlowEvent>>,
+    ) -> usize {
+        if now < self.last_prune {
+            self.last_prune = now;
+            return 0;
+        }
         if now - self.last_prune < 1.0 {
             return 0;
         }
         self.last_prune = now;
 
+        let mut record_expired = |reason: ExpiredFlowReason, flow: FlowSnapshot| {
+            if let Some(buf) = out.as_mut() {
+                (**buf).push(ExpiredFlowEvent {
+                    ts: now,
+                    reason,
+                    flow,
+                });
+            }
+        };
+
         let mut removed = 0;
         match &mut self.store {
             FlowStore::Full(flows) => {
                 if self.timeout_secs > 0.0 {
-                    flows.retain(|_, entry| {
-                        let keep = now - entry.last_seen <= self.timeout_secs;
-                        if !keep {
+                    let timeout_keys: Vec<FlowKey> = flows
+                        .iter()
+                        .filter_map(|(key, entry)| {
+                            if now - entry.last_seen > self.timeout_secs {
+                                Some(key.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+
+                    for key in timeout_keys {
+                        if let Some(entry) = flows.remove(&key) {
                             removed += 1;
+                            record_expired(
+                                ExpiredFlowReason::Timeout,
+                                FlowSnapshot::from_entry(&key, &entry),
+                            );
                         }
-                        keep
-                    });
+                    }
                 }
 
                 if self.max_flows > 0 && flows.len() > self.max_flows {
@@ -1041,8 +1095,12 @@ impl FlowTracker {
                     entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal));
                     let excess = flows.len() - self.max_flows;
                     for (key, _) in entries.into_iter().take(excess) {
-                        if flows.remove(&key).is_some() {
+                        if let Some(entry) = flows.remove(&key) {
                             removed += 1;
+                            record_expired(
+                                ExpiredFlowReason::Eviction,
+                                FlowSnapshot::from_entry(&key, &entry),
+                            );
                         }
                     }
                 }
@@ -1053,20 +1111,55 @@ impl FlowTracker {
                 flows_v6,
             } => {
                 if self.timeout_secs > 0.0 {
-                    flows_v4.retain(|_, entry| {
-                        let keep = now - entry.last_seen(*time_base_ms) <= self.timeout_secs;
-                        if !keep {
-                            removed += 1;
+                    let mut timeout_keys: Vec<CompactFlowKey> =
+                        Vec::with_capacity(flows_v4.len() + flows_v6.len());
+                    timeout_keys.extend(flows_v4.iter().filter_map(|(key, entry)| {
+                        if now - entry.last_seen(*time_base_ms) > self.timeout_secs {
+                            Some(CompactFlowKey::V4(*key))
+                        } else {
+                            None
                         }
-                        keep
-                    });
-                    flows_v6.retain(|_, entry| {
-                        let keep = now - entry.last_seen(*time_base_ms) <= self.timeout_secs;
-                        if !keep {
-                            removed += 1;
+                    }));
+                    timeout_keys.extend(flows_v6.iter().filter_map(|(key, entry)| {
+                        if now - entry.last_seen(*time_base_ms) > self.timeout_secs {
+                            Some(CompactFlowKey::V6(*key))
+                        } else {
+                            None
                         }
-                        keep
-                    });
+                    }));
+
+                    for key in timeout_keys {
+                        match key {
+                            CompactFlowKey::V4(v4) => {
+                                if let Some(entry) = flows_v4.remove(&v4) {
+                                    removed += 1;
+                                    let flow_key = CompactFlowKey::V4(v4).to_flow_key();
+                                    record_expired(
+                                        ExpiredFlowReason::Timeout,
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            &entry,
+                                            *time_base_ms,
+                                        ),
+                                    );
+                                }
+                            }
+                            CompactFlowKey::V6(v6) => {
+                                if let Some(entry) = flows_v6.remove(&v6) {
+                                    removed += 1;
+                                    let flow_key = CompactFlowKey::V6(v6).to_flow_key();
+                                    record_expired(
+                                        ExpiredFlowReason::Timeout,
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            &entry,
+                                            *time_base_ms,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
 
                 let total_len = flows_v4.len() + flows_v6.len();
@@ -1087,12 +1180,35 @@ impl FlowTracker {
                     entries.sort_unstable_by(|a, b| a.1.cmp(&b.1));
                     let excess = total_len - self.max_flows;
                     for (key, _) in entries.into_iter().take(excess) {
-                        let did_remove = match key {
-                            CompactFlowKey::V4(k) => flows_v4.remove(&k).is_some(),
-                            CompactFlowKey::V6(k) => flows_v6.remove(&k).is_some(),
-                        };
-                        if did_remove {
-                            removed += 1;
+                        match key {
+                            CompactFlowKey::V4(v4) => {
+                                if let Some(entry) = flows_v4.remove(&v4) {
+                                    removed += 1;
+                                    let flow_key = CompactFlowKey::V4(v4).to_flow_key();
+                                    record_expired(
+                                        ExpiredFlowReason::Eviction,
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            &entry,
+                                            *time_base_ms,
+                                        ),
+                                    );
+                                }
+                            }
+                            CompactFlowKey::V6(v6) => {
+                                if let Some(entry) = flows_v6.remove(&v6) {
+                                    removed += 1;
+                                    let flow_key = CompactFlowKey::V6(v6).to_flow_key();
+                                    record_expired(
+                                        ExpiredFlowReason::Eviction,
+                                        FlowSnapshot::from_scale_entry(
+                                            &flow_key,
+                                            &entry,
+                                            *time_base_ms,
+                                        ),
+                                    );
+                                }
+                            }
                         }
                     }
                 }
@@ -1972,6 +2088,32 @@ mod tests {
 
         let tracker_full = FlowTracker::new(60.0, 1000, true, false, false);
         assert!(matches!(tracker_full.store, FlowStore::Full(_)));
+    }
+
+    #[test]
+    fn maybe_expire_collect_reports_timeout_reason() {
+        let mut tracker = FlowTracker::new(1.0, 1000, false, false, false);
+        tracker.insert_synthetic_ipv4_flows(1);
+        tracker.last_prune = 0.0;
+
+        let mut events = Vec::new();
+        let removed = tracker.maybe_expire_collect(2.0, &mut events);
+        assert_eq!(removed, 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].reason, ExpiredFlowReason::Timeout);
+    }
+
+    #[test]
+    fn maybe_expire_collect_reports_eviction_reason() {
+        let mut tracker = FlowTracker::new(0.0, 1, false, false, false);
+        tracker.insert_synthetic_ipv4_flows(2);
+        tracker.last_prune = 0.0;
+
+        let mut events = Vec::new();
+        let removed = tracker.maybe_expire_collect(2.0, &mut events);
+        assert_eq!(removed, 1);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].reason, ExpiredFlowReason::Eviction);
     }
 
     #[test]
