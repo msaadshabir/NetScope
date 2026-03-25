@@ -111,3 +111,17 @@ Each line is a standalone JSON object:
 ```
 
 See [Anomaly Detection](anomaly-detection.md) for details on alert types and thresholds.
+
+## Expired Flow Export (JSONL)
+
+Write continuously expired or evicted flows to a JSON Lines file:
+
+```bash
+sudo netscope --expired-flows-jsonl expired-flows.jsonl
+```
+
+Each line is a standalone JSON object with `reason` (`"timeout"` or `"eviction"`) plus the flow snapshot fields:
+
+```json
+{"ts":1706123500.25,"reason":"timeout","protocol":"tcp","endpoint_a":{"ip":"10.0.0.5","port":51514},"endpoint_b":{"ip":"10.0.0.10","port":443},"first_seen":1706123492.11,"last_seen":1706123498.98,"duration_secs":6.87,"packets_a_to_b":12,"packets_b_to_a":9,"bytes_a_to_b":1640,"bytes_b_to_a":9020,"packets_total":21,"bytes_total":10660,"avg_bps":12417.17,"tcp_state":"established","client":"a_to_b","retransmissions":0,"out_of_order":0,"rtt_last_ms":2.1,"rtt_min_ms":1.8,"rtt_ewma_ms":2.0,"rtt_samples":5}
+```

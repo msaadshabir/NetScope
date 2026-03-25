@@ -58,7 +58,7 @@ Alerts are:
 
 1. **Printed to stdout** in the format `[alert] <description>`.
 2. **Sent to the web dashboard** (if enabled) in real time.
-3. **Written to a JSONL file** (if `--alerts-jsonl` is specified).
+3. **Written to a JSONL file** (if `--alerts-jsonl` is specified, in both inline and pipeline modes).
 
 ### JSONL Format
 

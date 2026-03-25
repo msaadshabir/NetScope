@@ -62,10 +62,10 @@ For authoritative defaults and the full TOML schema, see [Configuration](configu
 
 ## Dispatch Drops
 
-When a worker's channel is full, the capture thread drops the packet rather than blocking. This prevents the capture thread from stalling (which would cause kernel-level drops). Dispatch drops are counted and surfaced in both periodic stats ticks and the final summary:
+When a worker's channel is full, the capture thread drops the packet rather than blocking. This prevents the capture thread from stalling (which would cause kernel-level drops). Dispatch drops are counted and surfaced in both periodic stats ticks and the final summary. Periodic stats also include live kernel/libpcap drop deltas and totals:
 
 ```
-[stats] 942.13 Mbps | 100012 pps | 81234 flows | drops=0 (total=0)
+[stats] 942.13 Mbps | 100012 pps | 81234 flows | drops=0 (total=0) | kdrop=0 (total=120) ifdrop=0 (total=0)
 ```
 
 ```

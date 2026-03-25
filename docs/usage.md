@@ -58,6 +58,12 @@ sudo netscope --anomalies --alerts-jsonl alerts.jsonl
 
 Alerts are also printed to stdout. See [Anomaly Detection](anomaly-detection.md) for threshold tuning.
 
+Write continuously expired or evicted flows to JSONL:
+
+```bash
+sudo netscope --expired-flows-jsonl expired-flows.jsonl --flow-timeout-s 10
+```
+
 ## Web Dashboard
 
 Start the web dashboard:
@@ -98,6 +104,12 @@ Pipeline mode with the web dashboard:
 
 ```bash
 sudo netscope --pipeline --web --quiet --anomalies
+```
+
+Pipeline mode with alert and expired-flow JSONL outputs:
+
+```bash
+sudo netscope --pipeline --anomalies --alerts-jsonl alerts.jsonl --expired-flows-jsonl expired-flows.jsonl --quiet --stats
 ```
 
 See [Sharded Pipeline](pipeline.md) for architecture details and tuning.

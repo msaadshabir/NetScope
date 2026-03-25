@@ -10,7 +10,7 @@ Then open <http://127.0.0.1:8080>.
 
 ## Features
 
-- **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, and alert count.
+- **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, alert count, and kernel drop totals.
 - **Time-series chart** -- dual-axis throughput and packet rate history.
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.

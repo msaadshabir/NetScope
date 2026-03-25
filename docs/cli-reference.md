@@ -37,6 +37,7 @@ libpcap buffer sizing and immediate mode are configured through the `[capture]` 
 | `--write-pcap <PATH>` | | path | (none) | Write captured packets to a pcap file. |
 | `--export-json <PATH>` | | path | (none) | Export the flow table to JSON on exit. |
 | `--export-csv <PATH>` | | path | (none) | Export the flow table to CSV on exit. |
+| `--expired-flows-jsonl <PATH>` | | path | (none) | Write expired/evicted flow records as JSON lines. |
 
 Note: verbosity level `-vv` or higher also enables detailed per-packet output even if `--hex-dump` is not set.
 
@@ -62,7 +63,7 @@ Note: verbosity level `-vv` or higher also enables detailed per-packet output ev
 |---|---|---|---|
 | `--anomalies` | flag | off | Enable anomaly detection (SYN flood, port scan). |
 | `--no-anomalies` | flag | | Disable anomaly detection. |
-| `--alerts-jsonl <PATH>` | path | (none) | Write anomaly alerts as JSON lines to a file. |
+| `--alerts-jsonl <PATH>` | path | (none) | Write anomaly alerts as JSON lines to a file (inline and pipeline modes). |
 
 See [Anomaly Detection](anomaly-detection.md) for threshold configuration (requires a config file).
 
