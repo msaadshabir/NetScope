@@ -6,7 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- `--expired-flows-jsonl <PATH>` to continuously write expired/evicted flow records as JSONL during capture (includes `reason = timeout | eviction`).
+- Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
+
 ### Fixed
+- `--alerts-jsonl` now works in pipeline mode (single-writer JSONL output owned by the aggregator).
 - `--list-interfaces` no longer depends on successfully loading a config file.
 - Web packet detail lookups are resilient to out-of-order `PacketStored` events in pipeline mode.
 - Pipeline aggregator waits for all shard shutdown snapshots before exiting (prevents incomplete exports on Ctrl-C).

@@ -11,7 +11,8 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
 - **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames
-- **Export** -- flows to JSON/CSV, alerts to JSONL, packets to pcap
+- **Live drop metrics** -- periodic kernel/libpcap drop and interface drop deltas/totals (CLI + dashboard)
+- **Export** -- flows to JSON/CSV, alerts to JSONL (inline and pipeline modes), expired/evicted flows to JSONL, packets to pcap
 - **TOML configuration** with full CLI override support
 
 ## Quickstart
@@ -52,7 +53,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Fo
 ## Notes
 
 - Capture typically requires **root privileges**. The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
-- IPv6 extension headers are not parsed (payload starts after the fixed 40-byte header).
+- IPv6 extension headers are partially supported: common headers are walked to find the effective transport payload and shard routing key.
 - IPv4 non-initial fragments are skipped for flow tracking.
 - Timestamps are formatted as `HH:MM:SS.microseconds` from UNIX-epoch UTC capture times.
 
