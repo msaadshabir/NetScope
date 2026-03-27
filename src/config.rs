@@ -75,6 +75,8 @@ impl Config {
 #[serde(default)]
 pub struct CaptureConfig {
     pub interface: Option<String>,
+    #[serde(deserialize_with = "empty_path_none")]
+    pub read_pcap: Option<PathBuf>,
     pub promiscuous: bool,
     pub snaplen: i32,
     pub timeout_ms: i32,
@@ -87,6 +89,7 @@ impl Default for CaptureConfig {
     fn default() -> Self {
         CaptureConfig {
             interface: None,
+            read_pcap: None,
             promiscuous: true,
             snaplen: 65535,
             timeout_ms: 100,

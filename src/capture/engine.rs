@@ -1,7 +1,8 @@
 //! Core capture engine: opens a pcap handle and yields raw packet data.
 
-use pcap::{Active, Capture, Device};
+use pcap::{Active, Capture, Device, Offline};
 use std::fmt;
+use std::path::Path;
 
 /// Errors from the capture engine.
 #[derive(Debug)]
@@ -127,6 +128,23 @@ pub fn open_capture(config: &CaptureConfig) -> Result<Capture<Active>, CaptureEr
         buffer_size_mb = config.buffer_size_mb,
         filter = config.filter.as_deref().unwrap_or("none"),
         "capture started"
+    );
+
+    Ok(cap)
+}
+
+/// Open an offline pcap file and optionally apply a BPF filter.
+pub fn open_offline(path: &Path, filter: Option<&str>) -> Result<Capture<Offline>, CaptureError> {
+    let mut cap = Capture::from_file(path).map_err(CaptureError::Pcap)?;
+
+    if let Some(filter) = filter {
+        cap.filter(filter, true).map_err(CaptureError::Pcap)?;
+    }
+
+    tracing::info!(
+        pcap = %path.display(),
+        filter = filter.unwrap_or("none"),
+        "offline capture opened"
     );
 
     Ok(cap)

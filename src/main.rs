@@ -116,28 +116,96 @@ fn list_interfaces() {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureMode {
+    Live,
+    Offline,
+}
+
+enum CaptureSource {
+    Live(pcap::Capture<pcap::Active>),
+    Offline(pcap::Capture<pcap::Offline>),
+}
+
+enum CaptureRead<'a> {
+    Packet(pcap::Packet<'a>),
+    Idle,
+    Eof,
+}
+
+impl CaptureSource {
+    fn mode(&self) -> CaptureMode {
+        match self {
+            CaptureSource::Live(_) => CaptureMode::Live,
+            CaptureSource::Offline(_) => CaptureMode::Offline,
+        }
+    }
+
+    fn savefile<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<pcap::Savefile, pcap::Error> {
+        match self {
+            CaptureSource::Live(cap) => cap.savefile(path),
+            CaptureSource::Offline(cap) => cap.savefile(path),
+        }
+    }
+
+    fn next_packet(&mut self) -> Result<CaptureRead<'_>, pcap::Error> {
+        match self {
+            CaptureSource::Live(cap) => match cap.next_packet() {
+                Ok(packet) => Ok(CaptureRead::Packet(packet)),
+                Err(pcap::Error::TimeoutExpired) => Ok(CaptureRead::Idle),
+                Err(err) => Err(err),
+            },
+            CaptureSource::Offline(cap) => match cap.next_packet() {
+                Ok(packet) => Ok(CaptureRead::Packet(packet)),
+                Err(pcap::Error::NoMorePackets) => Ok(CaptureRead::Eof),
+                Err(err) => Err(err),
+            },
+        }
+    }
+
+    fn stats(&mut self) -> Result<Option<pcap::Stat>, pcap::Error> {
+        match self {
+            CaptureSource::Live(cap) => cap.stats().map(Some),
+            CaptureSource::Offline(_) => Ok(None),
+        }
+    }
+}
+
 /// Main capture loop: open capture, read packets, parse, and display.
 fn run_capture(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let capture_config = capture::engine::CaptureConfig {
-        interface: config.capture.interface.clone(),
-        promiscuous: config.capture.promiscuous,
-        snaplen: config.capture.snaplen,
-        timeout_ms: config.capture.timeout_ms,
-        buffer_size_mb: config.capture.buffer_size_mb,
-        immediate_mode: config.capture.immediate_mode,
-        filter: config.capture.filter.clone(),
-    };
+    if config.capture.interface.is_some() && config.capture.read_pcap.is_some() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "configuration error: capture.interface and capture.read_pcap are mutually exclusive",
+        )
+        .into());
+    }
 
-    let mut cap = capture::engine::open_capture(&capture_config)?;
+    let mut cap = if let Some(path) = config.capture.read_pcap.as_deref() {
+        CaptureSource::Offline(capture::engine::open_offline(
+            path,
+            config.capture.filter.as_deref(),
+        )?)
+    } else {
+        let capture_config = capture::engine::CaptureConfig {
+            interface: config.capture.interface.clone(),
+            promiscuous: config.capture.promiscuous,
+            snaplen: config.capture.snaplen,
+            timeout_ms: config.capture.timeout_ms,
+            buffer_size_mb: config.capture.buffer_size_mb,
+            immediate_mode: config.capture.immediate_mode,
+            filter: config.capture.filter.clone(),
+        };
+        CaptureSource::Live(capture::engine::open_capture(&capture_config)?)
+    };
     let mut savefile = match &config.output.write_pcap {
         Some(path) => Some(cap.savefile(path)?),
         None => None,
     };
-
-    let interface_name = config.capture.interface.as_deref().unwrap_or("(default)");
+    let capture_mode = cap.mode();
 
     // Start web dashboard if enabled
     let web_handle = if config.web.enabled {
@@ -165,14 +233,32 @@ fn run_capture(
     };
 
     println!("NetScope v{}", env!("CARGO_PKG_VERSION"));
-    println!("Capturing on interface: {}", interface_name);
+    match capture_mode {
+        CaptureMode::Live => {
+            let interface_name = config.capture.interface.as_deref().unwrap_or("(default)");
+            println!("Capturing on interface: {}", interface_name);
+        }
+        CaptureMode::Offline => match config.capture.read_pcap.as_ref() {
+            Some(path) => println!("Reading packets from pcap: {}", path.display()),
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "configuration error: offline capture requires capture.read_pcap path",
+                )
+                .into());
+            }
+        },
+    }
     if let Some(filter) = &config.capture.filter {
         println!("Filter: {}", filter);
     }
     if config.run.count > 0 {
-        println!("Capturing {} packets...", config.run.count);
+        println!("Processing {} packets...", config.run.count);
     } else {
-        println!("Capturing packets (Ctrl-C to stop)...");
+        match capture_mode {
+            CaptureMode::Live => println!("Capturing packets (Ctrl-C to stop)..."),
+            CaptureMode::Offline => println!("Processing packets until EOF..."),
+        }
     }
 
     if config.pipeline.enabled {
@@ -193,9 +279,9 @@ fn run_capture(
         )?;
     }
 
-    // Print kernel-level pcap statistics (recv/drop/ifdrop)
+    // Print kernel-level pcap statistics (recv/drop/ifdrop) for live captures.
     match cap.stats() {
-        Ok(stats) => {
+        Ok(Some(stats)) => {
             println!("  Kernel received:   {}", stats.received);
             println!("  Kernel dropped:    {}", stats.dropped);
             println!("  Interface dropped: {}", stats.if_dropped);
@@ -204,6 +290,7 @@ fn run_capture(
                 println!("  Drop rate:         {:.2}%", drop_pct);
             }
         }
+        Ok(None) => {}
         Err(e) => {
             tracing::debug!(error = %e, "failed to read pcap stats");
         }
@@ -302,7 +389,7 @@ impl InlineKernelStats {
 }
 
 fn maybe_poll_live_pcap_stats(
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut CaptureSource,
     last_poll: &mut Instant,
 ) -> Option<(u64, u64)> {
     let now = Instant::now();
@@ -312,7 +399,8 @@ fn maybe_poll_live_pcap_stats(
     *last_poll = now;
 
     match cap.stats() {
-        Ok(stats) => Some((stats.dropped as u64, stats.if_dropped as u64)),
+        Ok(Some(stats)) => Some((stats.dropped as u64, stats.if_dropped as u64)),
+        Ok(None) => None,
         Err(e) => {
             tracing::debug!(error = %e, "failed to read live pcap stats");
             None
@@ -352,7 +440,7 @@ fn flush_expired_flows_jsonl(
 fn run_capture_inline(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut CaptureSource,
     mut savefile: Option<&mut pcap::Savefile>,
     web_handle: Option<&web::server::WebHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -388,9 +476,15 @@ fn run_capture_inline(
     let mut stats_bytes: u64 = 0;
     let mut stats_packets: u64 = 0;
     let mut kernel_stats = InlineKernelStats::default();
-    let mut live_stats_poll_last = Instant::now()
-        .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
-        .unwrap_or_else(Instant::now);
+    let mut live_stats_poll_last = if cap.mode() == CaptureMode::Live {
+        Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
+                .unwrap_or_else(Instant::now),
+        )
+    } else {
+        None
+    };
 
     // Web dashboard tick state
     let mut web_tick_last = Instant::now();
@@ -406,8 +500,9 @@ fn run_capture_inline(
 
         // Read next packet
         let packet = match cap.next_packet() {
-            Ok(packet) => Some(packet),
-            Err(pcap::Error::TimeoutExpired) => None,
+            Ok(CaptureRead::Packet(packet)) => Some(packet),
+            Ok(CaptureRead::Idle) => None,
+            Ok(CaptureRead::Eof) => break,
             Err(e) => {
                 tracing::error!(error = %e, "capture error");
                 return Err(Box::new(e));
@@ -527,10 +622,12 @@ fn run_capture_inline(
             }
         }
 
-        if let Some((dropped_total, if_dropped_total)) =
-            maybe_poll_live_pcap_stats(cap, &mut live_stats_poll_last)
-        {
-            kernel_stats.update_totals(dropped_total, if_dropped_total);
+        if let Some(last_poll) = live_stats_poll_last.as_mut() {
+            if let Some((dropped_total, if_dropped_total)) =
+                maybe_poll_live_pcap_stats(cap, last_poll)
+            {
+                kernel_stats.update_totals(dropped_total, if_dropped_total);
+            }
         }
 
         // Stats printing
@@ -701,7 +798,7 @@ fn run_capture_inline(
 fn run_capture_pipeline(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
-    cap: &mut pcap::Capture<pcap::Active>,
+    cap: &mut CaptureSource,
     mut savefile: Option<&mut pcap::Savefile>,
     web_handle: Option<&web::server::WebHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -736,9 +833,15 @@ fn run_capture_pipeline(
     let mut packet_count: u64 = 0;
     let mut stats_last = Instant::now();
     let mut final_kernel_stats: Option<(u64, u64)> = None;
-    let mut live_stats_poll_last = Instant::now()
-        .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
-        .unwrap_or_else(Instant::now);
+    let mut live_stats_poll_last = if cap.mode() == CaptureMode::Live {
+        Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(LIVE_PCAP_STATS_POLL_INTERVAL_MS))
+                .unwrap_or_else(Instant::now),
+        )
+    } else {
+        None
+    };
 
     let capture_result = (|| -> Result<(), Box<dyn std::error::Error>> {
         while running.load(Ordering::SeqCst) {
@@ -747,8 +850,9 @@ fn run_capture_pipeline(
             }
 
             let packet = match cap.next_packet() {
-                Ok(packet) => Some(packet),
-                Err(pcap::Error::TimeoutExpired) => None,
+                Ok(CaptureRead::Packet(packet)) => Some(packet),
+                Ok(CaptureRead::Idle) => None,
+                Ok(CaptureRead::Eof) => break,
                 Err(e) => {
                     tracing::error!(error = %e, "capture error");
                     return Err(Box::new(e));
@@ -791,10 +895,12 @@ fn run_capture_pipeline(
                 }
             }
 
-            if let Some((dropped_total, if_dropped_total)) =
-                maybe_poll_live_pcap_stats(cap, &mut live_stats_poll_last)
-            {
-                kernel_stats.update_totals(dropped_total, if_dropped_total);
+            if let Some(last_poll) = live_stats_poll_last.as_mut() {
+                if let Some((dropped_total, if_dropped_total)) =
+                    maybe_poll_live_pcap_stats(cap, last_poll)
+                {
+                    kernel_stats.update_totals(dropped_total, if_dropped_total);
+                }
             }
 
             // CLI stats from aggregator
@@ -908,6 +1014,15 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
 
     if let Some(value) = &args.interface {
         capture.interface = Some(value.clone());
+        capture.read_pcap = None;
+    }
+    if let Some(value) = &args.read_pcap {
+        if value.as_os_str().is_empty() {
+            capture.read_pcap = None;
+        } else {
+            capture.read_pcap = Some(value.clone());
+            capture.interface = None;
+        }
     }
     if let Some(value) = &args.filter {
         capture.filter = Some(value.clone());

@@ -13,6 +13,14 @@ pub struct Cli {
     #[arg(short, long)]
     pub interface: Option<String>,
 
+    /// Read packets from an offline pcap file
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = ["interface", "promiscuous", "no_promiscuous"]
+    )]
+    pub read_pcap: Option<std::path::PathBuf>,
+
     /// BPF filter expression (e.g., "tcp port 80", "host 192.168.1.1")
     #[arg(short, long)]
     pub filter: Option<String>,

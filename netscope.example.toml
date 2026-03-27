@@ -4,6 +4,7 @@
 
 [capture]
 # interface = "en0"
+# read_pcap = "/path/to/trace.pcap"
 promiscuous = true
 snaplen = 65535
 timeout_ms = 100
