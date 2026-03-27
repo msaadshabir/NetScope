@@ -14,7 +14,7 @@ Then open <http://127.0.0.1:8080>.
 - **Time-series chart** -- dual-axis throughput and packet rate history.
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.
-- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet, IP, TCP/UDP/ICMP fields) and hex dump, fetched on demand from the server.
+- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet, IP, TCP/UDP/ICMP, and DNS for UDP/53 when detected) and hex dump, fetched on demand from the server.
 - **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan).
 - **Perf overlay** -- open `/?perf=1` to show dashboard fps, render latency p50/p95/p99, dropped frame count, and estimated client/server clock offset.
 - **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection.

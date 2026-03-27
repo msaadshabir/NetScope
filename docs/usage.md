@@ -24,6 +24,14 @@ Capture only HTTP traffic with hex dumps:
 sudo netscope -f "tcp port 80" --hex-dump
 ```
 
+Capture DNS traffic (UDP/53) with decoded DNS summaries:
+
+```bash
+sudo netscope -f "udp port 53" -c 20
+```
+
+For per-packet DNS detail output, use `-vv`.
+
 ## Offline pcap Analysis
 
 Read packets from a pcap file (no sudo required):

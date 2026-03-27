@@ -38,6 +38,7 @@ netscope/
       tcp.rs                    # TCP header parser
       udp.rs                    # UDP header parser
       icmp.rs                   # ICMP header parser
+      dns.rs                    # DNS message parser (UDP/53)
     analysis/
       mod.rs                    # Module declaration
       anomaly.rs                # SYN flood and port scan detection
