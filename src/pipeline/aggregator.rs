@@ -2,9 +2,9 @@
 //! statistics, and forwards results to the CLI and web dashboard.
 
 use crossbeam_channel::Receiver;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
@@ -49,7 +49,6 @@ fn kernel_tick_stats(
         if_drops_total: if_dropped_total,
     }
 }
-
 
 /// Aggregated tick data merged from all shards.
 #[derive(Debug, Clone)]
@@ -162,13 +161,8 @@ pub fn run(
                     if all_present {
                         let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
                         let kstats = kernel_tick_stats(&kernel_stats, &mut prev_kernel_totals);
-                        let merged = merge_ticks(
-                            &mut pending_ticks,
-                            elapsed,
-                            max_top_n,
-                            &stats,
-                            kstats,
-                        );
+                        let merged =
+                            merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats, kstats);
 
                         // Forward to web dashboard.
                         if let Some(tx) = &web_event_tx {
@@ -224,13 +218,8 @@ pub fn run(
                 if elapsed_ms >= tick_deadline_ms && pending_ticks.iter().any(|t| t.is_some()) {
                     let elapsed = tick_start.elapsed().as_secs_f64().max(0.001);
                     let kstats = kernel_tick_stats(&kernel_stats, &mut prev_kernel_totals);
-                    let merged = merge_ticks(
-                        &mut pending_ticks,
-                        elapsed,
-                        max_top_n,
-                        &stats,
-                        kstats,
-                    );
+                    let merged =
+                        merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats, kstats);
 
                     if let Some(tx) = &web_event_tx {
                         let stats_tick = aggregated_to_stats_tick(
@@ -491,8 +480,8 @@ fn write_expired_flows_to_jsonl(sink: &mut Option<JsonlSink>, events: Vec<Expire
 mod tests {
     use super::*;
     use crate::flow::{Endpoint, FlowProtocol};
-    use crate::pipeline::worker::ShardShutdown;
     use crate::pipeline::KernelPcapStats;
+    use crate::pipeline::worker::ShardShutdown;
 
     fn test_snapshot(seed: u16) -> FlowSnapshot {
         FlowSnapshot {
@@ -535,7 +524,18 @@ mod tests {
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(rx, thread_handle, None, 0, 0, stats, kernel_stats, 10, None, None);
+            run(
+                rx,
+                thread_handle,
+                None,
+                0,
+                0,
+                stats,
+                kernel_stats,
+                10,
+                None,
+                None,
+            );
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {
@@ -568,7 +568,18 @@ mod tests {
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(rx, thread_handle, None, 0, 0, stats, kernel_stats, 10, None, None);
+            run(
+                rx,
+                thread_handle,
+                None,
+                0,
+                0,
+                stats,
+                kernel_stats,
+                10,
+                None,
+                None,
+            );
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {

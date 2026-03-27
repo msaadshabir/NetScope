@@ -30,10 +30,10 @@ pub mod worker;
 
 use crate::config::{AnalysisConfig, FlowConfig, StatsConfig, WebConfig};
 use crate::web;
-use crossbeam_channel::{bounded, Sender};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use crossbeam_channel::{Sender, bounded};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 
 pub use aggregator::AggregatorHandle;

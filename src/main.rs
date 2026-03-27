@@ -141,7 +141,10 @@ impl CaptureSource {
         }
     }
 
-    fn savefile<P: AsRef<std::path::Path>>(&mut self, path: P) -> Result<pcap::Savefile, pcap::Error> {
+    fn savefile<P: AsRef<std::path::Path>>(
+        &mut self,
+        path: P,
+    ) -> Result<pcap::Savefile, pcap::Error> {
         match self {
             CaptureSource::Live(cap) => cap.savefile(path),
             CaptureSource::Offline(cap) => cap.savefile(path),
@@ -367,7 +370,9 @@ impl InlineKernelStats {
             .if_dropped_interval_stats
             .saturating_add(if_dropped_delta);
         self.dropped_interval_web = self.dropped_interval_web.saturating_add(dropped_delta);
-        self.if_dropped_interval_web = self.if_dropped_interval_web.saturating_add(if_dropped_delta);
+        self.if_dropped_interval_web = self
+            .if_dropped_interval_web
+            .saturating_add(if_dropped_delta);
         self.initialized = true;
     }
 
@@ -943,13 +948,19 @@ fn run_capture_pipeline(
             return Err(Box::new(err));
         }
 
-        final_kernel_stats = Some((kernel_stats.dropped_total(), kernel_stats.if_dropped_total()));
+        final_kernel_stats = Some((
+            kernel_stats.dropped_total(),
+            kernel_stats.if_dropped_total(),
+        ));
 
         Ok(())
     })();
 
     if final_kernel_stats.is_none() {
-        final_kernel_stats = Some((kernel_stats.dropped_total(), kernel_stats.if_dropped_total()));
+        final_kernel_stats = Some((
+            kernel_stats.dropped_total(),
+            kernel_stats.if_dropped_total(),
+        ));
     }
 
     // Always shut down worker/aggregator threads before returning, including

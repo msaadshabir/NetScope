@@ -224,7 +224,7 @@ mod tests {
 
         let ipv6 = 14;
         frame[ipv6] = 0x60; // Version 6
-                            // payload length = 8 + 20
+        // payload length = 8 + 20
         frame[ipv6 + 4..ipv6 + 6].copy_from_slice(&(28u16).to_be_bytes());
         frame[ipv6 + 6] = 0; // Next Header = Hop-by-Hop options
         frame[ipv6 + 7] = 64; // Hop limit
@@ -277,7 +277,7 @@ mod tests {
 
         let frag = ipv6 + 40;
         frame[frag] = 6; // Encapsulated next header = TCP
-                         // fragment offset = 1 (non-initial fragment)
+        // fragment offset = 1 (non-initial fragment)
         let fragment_field = 1u16 << 3;
         frame[frag + 2..frag + 4].copy_from_slice(&fragment_field.to_be_bytes());
         frame[frag + 4..frag + 8].copy_from_slice(&fragment_id.to_be_bytes());

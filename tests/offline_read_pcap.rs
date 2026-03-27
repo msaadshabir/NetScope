@@ -24,7 +24,8 @@ fn write_test_pcap(path: &Path) {
     header.extend_from_slice(&0u32.to_le_bytes()); // sigfigs
     header.extend_from_slice(&65535u32.to_le_bytes()); // snaplen
     header.extend_from_slice(&1u32.to_le_bytes()); // linktype Ethernet
-    file.write_all(&header).expect("failed to write pcap header");
+    file.write_all(&header)
+        .expect("failed to write pcap header");
 
     // One Ethernet+IPv4 packet (14 + 20 bytes)
     let packet: [u8; 34] = [
@@ -82,7 +83,11 @@ fn read_pcap_inline_mode() {
     ]);
 
     if let Err(err) = std::fs::remove_file(&pcap_path) {
-        eprintln!("warning: failed to delete temp pcap {}: {}", pcap_path.display(), err);
+        eprintln!(
+            "warning: failed to delete temp pcap {}: {}",
+            pcap_path.display(),
+            err
+        );
     }
 
     assert!(
@@ -91,7 +96,11 @@ fn read_pcap_inline_mode() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Packets captured:  1"), "stdout was: {}", stdout);
+    assert!(
+        stdout.contains("Packets captured:  1"),
+        "stdout was: {}",
+        stdout
+    );
 }
 
 #[test]
@@ -111,7 +120,11 @@ fn read_pcap_pipeline_mode() {
     ]);
 
     if let Err(err) = std::fs::remove_file(&pcap_path) {
-        eprintln!("warning: failed to delete temp pcap {}: {}", pcap_path.display(), err);
+        eprintln!(
+            "warning: failed to delete temp pcap {}: {}",
+            pcap_path.display(),
+            err
+        );
     }
 
     assert!(
@@ -120,5 +133,9 @@ fn read_pcap_pipeline_mode() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Packets captured:  1"), "stdout was: {}", stdout);
+    assert!(
+        stdout.contains("Packets captured:  1"),
+        "stdout was: {}",
+        stdout
+    );
 }
