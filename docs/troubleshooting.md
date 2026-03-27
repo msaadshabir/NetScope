@@ -25,6 +25,21 @@ If you want a persistent Linux capability-based setup instead of running with `s
 
 **Fix:** Run with the same elevated privileges described in [Getting Started](getting-started.md#permissions). Without root access, libpcap cannot enumerate interfaces on most systems.
 
+## Configuration Errors
+
+**Symptom:** NetScope exits immediately with an error like:
+
+- `configuration error: capture.interface and capture.read_pcap are mutually exclusive`
+- `configuration error: offline capture requires capture.read_pcap path`
+
+**Cause:** Invalid or inconsistent capture configuration.
+
+**Fixes:**
+
+1. Set **at most one** of `--interface` / `capture.interface` and `--read-pcap` / `capture.read_pcap`.
+2. For offline analysis, always provide a pcap path via `--read-pcap <PATH>` (or `capture.read_pcap` in TOML).
+3. If you intend to use live capture but set `capture.read_pcap = ""`, that disables offline mode (empty strings are treated as unset) and NetScope will fall back to the default interface unless `capture.interface` is specified.
+
 ## No Packets Captured
 
 Possible causes:

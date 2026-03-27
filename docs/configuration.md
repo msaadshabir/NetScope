@@ -36,7 +36,7 @@ Use [CLI Reference](cli-reference.md) for flag-level help and this page for the 
 
 ## Path Fields
 
-In TOML, path fields (`write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `alerts_jsonl`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
+In TOML, path fields (`capture.read_pcap`, `write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `alerts_jsonl`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
 
 ```toml
 [output]
@@ -52,6 +52,7 @@ expired_flows_jsonl = "" # disabled
 | Key           | Type   | Default | Description                                                      |
 | ------------- | ------ | ------- | ---------------------------------------------------------------- |
 | `interface`   | string | (auto)  | Network interface name (e.g., `"en0"`). Omit for system default. |
+| `read_pcap`   | path   | (none)  | Read packets from an offline pcap file instead of a live interface. Mutually exclusive with `interface`. |
 | `promiscuous` | bool   | `true`  | Capture in promiscuous mode.                                     |
 | `snaplen`     | int    | `65535` | Maximum bytes captured per packet.                               |
 | `timeout_ms`  | int    | `100`   | Capture read timeout in milliseconds.                            |
@@ -59,11 +60,13 @@ expired_flows_jsonl = "" # disabled
 | `immediate_mode` | bool | `false` | Enable libpcap immediate mode (if supported by your libpcap build). |
 | `filter`      | string | (none)  | BPF filter expression.                                           |
 
+Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If both are set, NetScope exits with a configuration error. If neither is set, NetScope captures from the system default interface. When `capture.read_pcap` is set, live-capture-only settings like `promiscuous`, `timeout_ms`, `buffer_size_mb`, and `immediate_mode` have no effect.
+
 ### `[run]`
 
 | Key     | Type | Default | Description                                |
 | ------- | ---- | ------- | ------------------------------------------ |
-| `count` | int  | `0`     | Maximum packets to capture. 0 = unlimited. |
+| `count` | int  | `0`     | Maximum packets to process. 0 = unlimited (live: Ctrl-C; offline: EOF). |
 
 ### `[output]`
 

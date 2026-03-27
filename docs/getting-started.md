@@ -30,14 +30,17 @@ This page focuses on first-run setup. For additional workflows, see [Usage Examp
 
 ## Permissions
 
-Live packet capture requires access to network interfaces, which typically means **root / sudo** on Linux and macOS.
+Live packet capture requires access to network interfaces, which typically means **root / sudo** on Linux and macOS. Offline pcap analysis via `--read-pcap` does **not** require elevated privileges.
 
 ```bash
-# Run directly with sudo
+# Live capture (requires privileges)
 sudo netscope
 
 # Or during development
 sudo cargo run --release --
+
+# Offline pcap analysis (no sudo required)
+netscope --read-pcap trace.pcap --quiet --stats
 ```
 
 On Linux, you can often avoid running as root by granting the `CAP_NET_RAW` capability (some setups may also require `CAP_NET_ADMIN`):

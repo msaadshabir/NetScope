@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- `--read-pcap <PATH>` and `capture.read_pcap` to analyze offline pcaps (supports BPF filters and can be paired with `--write-pcap` to rewrite pcaps).
 - `--expired-flows-jsonl <PATH>` to continuously write expired/evicted flow records as JSONL during capture (includes `reason = timeout | eviction`).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 

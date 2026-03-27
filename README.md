@@ -5,6 +5,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 ## Features
 
 - **Live packet capture** via libpcap with BPF filter support
+- **Offline pcap analysis** via `--read-pcap` (supports BPF filters; no elevated privileges required)
 - **Zero-copy protocol parsing** -- Ethernet, 802.1Q VLAN, IPv4, IPv6, TCP, UDP, ICMP
 - **Flow tracking** -- bidirectional counters, TCP state machine, RTT estimation, retransmission and out-of-order detection
 - **Scale-mode flow storage** -- compact internal flow tables activate automatically when deep TCP analysis is disabled
@@ -27,11 +28,14 @@ sudo ./target/release/netscope --list-interfaces
 # Capture on the default interface
 sudo ./target/release/netscope
 
+# Analyze an offline pcap (no sudo required)
+./target/release/netscope --read-pcap trace.pcap --quiet --stats
+
 # Start the web dashboard (open http://127.0.0.1:8080)
 sudo ./target/release/netscope --web --quiet
 ```
 
-Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md). For dashboard-specific behavior and tuning, see [Web Dashboard](docs/web-dashboard.md).
+Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Offline pcap analysis (`--read-pcap`) does not. For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md). For dashboard-specific behavior and tuning, see [Web Dashboard](docs/web-dashboard.md).
 
 ## Documentation
 
@@ -52,7 +56,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Fo
 
 ## Notes
 
-- Capture typically requires **root privileges**. The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
+- Live capture typically requires **root privileges**. Offline pcap analysis (`--read-pcap`) does not. The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
 - IPv6 extension headers are partially supported: common headers are walked to find the effective transport payload and shard routing key.
 - IPv4 non-initial fragments are skipped for flow tracking.
 - Timestamps are formatted as `HH:MM:SS.microseconds` from UNIX-epoch UTC capture times.

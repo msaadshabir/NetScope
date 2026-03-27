@@ -12,6 +12,12 @@ sudo netscope --write-pcap capture.pcap
 
 The file uses standard pcap format and can be opened with Wireshark, tcpdump, or any pcap-compatible tool. In pipeline mode, pcap writing happens on the capture thread before dispatch, so all packets are written regardless of dispatch drops.
 
+You can also use `--read-pcap` with `--write-pcap` to produce a filtered or trimmed pcap (no sudo required):
+
+```bash
+netscope --read-pcap trace.pcap -f "tcp port 443" --count 10000 --write-pcap filtered.pcap --quiet
+```
+
 ## Flow Table Export
 
 Export the flow table on exit:

@@ -24,6 +24,26 @@ Capture only HTTP traffic with hex dumps:
 sudo netscope -f "tcp port 80" --hex-dump
 ```
 
+## Offline pcap Analysis
+
+Read packets from a pcap file (no sudo required):
+
+```bash
+netscope --read-pcap trace.pcap --quiet --stats --top-flows 10
+```
+
+Use pipeline mode with offline input:
+
+```bash
+netscope --read-pcap trace.pcap --pipeline --quiet --stats
+```
+
+Filter and rewrite an existing pcap:
+
+```bash
+netscope --read-pcap trace.pcap -f "tcp port 443" --count 10000 --write-pcap filtered.pcap --quiet
+```
+
 ## Throughput Stats
 
 Show periodic throughput stats with the top 5 flows by bandwidth, suppressing per-packet output:

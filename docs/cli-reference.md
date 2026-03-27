@@ -15,8 +15,9 @@ For boolean flags, the "Default" column describes the resulting default behavior
 | Flag | Short | Type | Default | Description |
 |---|---|---|---|---|
 | `--interface <IFACE>` | `-i` | string | (auto) | Network interface to capture on (e.g., `en0`, `eth0`). If omitted, the system default is used. |
+| `--read-pcap <PATH>` | | path | (none) | Read packets from an offline pcap file. Conflicts with `--interface` and promiscuous mode flags. |
 | `--filter <EXPR>` | `-f` | string | (none) | BPF filter expression (e.g., `"tcp port 80"`, `"host 192.168.1.1"`). |
-| `--count <N>` | `-c` | int | 0 | Maximum packets to capture. 0 = unlimited (run until Ctrl-C). |
+| `--count <N>` | `-c` | int | 0 | Maximum packets to process. 0 = unlimited (live: Ctrl-C; offline: EOF). |
 | `--promiscuous` | `-p` | flag | on | Capture in promiscuous mode. |
 | `--no-promiscuous` | | flag | | Disable promiscuous mode. |
 | `--snaplen <N>` | `-s` | int | 65535 | Maximum bytes captured per packet. |
