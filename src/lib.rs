@@ -82,7 +82,13 @@ pub fn build_packet_data(
     parsed: &protocol::ParsedPacket<'_>,
     max_payload_bytes: usize,
 ) -> (web::messages::PacketSample, web::messages::StoredPacket) {
-    let (proto_str, src_str, dst_str, info_str) = summarise_packet(parsed);
+    let dns = match &parsed.transport {
+        Some(protocol::TransportHeader::Udp(hdr)) => {
+            protocol::dns::parse_dns_udp(parsed.payload, hdr.src_port(), hdr.dst_port())
+        }
+        _ => None,
+    };
+    let (proto_str, src_str, dst_str, info_str) = summarise_packet(parsed, dns.as_ref());
 
     let sample = web::messages::PacketSample {
         id,
@@ -206,6 +212,62 @@ pub fn build_packet_data(
                         ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
                     ],
                 });
+
+                if let Some(dns) = dns {
+                    let mut fields = vec![
+                        ("ID".into(), format!("0x{:04x}", dns.id())),
+                        (
+                            "Message Type".into(),
+                            if dns.is_response() {
+                                "Response".to_string()
+                            } else {
+                                "Query".to_string()
+                            },
+                        ),
+                        ("Opcode".into(), dns.opcode_name().to_string()),
+                        ("RCode".into(), dns.rcode_name().to_string()),
+                        ("Flags".into(), dns.flags_string()),
+                        ("Questions".into(), format!("{}", dns.question_count())),
+                        ("Answers".into(), format!("{}", dns.answer_count())),
+                        ("Authorities".into(), format!("{}", dns.authority_count())),
+                        ("Additionals".into(), format!("{}", dns.additional_count())),
+                    ];
+
+                    match dns.parse_sections(2, 2, 1, 1) {
+                        Ok(sections) => {
+                            if let Some(question) = sections.questions.first() {
+                                let qname = question
+                                    .name()
+                                    .unwrap_or_else(|_| "<invalid-name>".to_string());
+                                fields.push((
+                                    "Question".into(),
+                                    format!("{} {}", question.qtype_label(), qname),
+                                ));
+                                fields.push(("QClass".into(), question.qclass_label()));
+                            }
+
+                            if !sections.answers.is_empty() {
+                                let answer_summaries: Vec<String> =
+                                    sections.answers.iter().map(|rr| rr.summary()).collect();
+                                fields.push((
+                                    "Answers (sample)".into(),
+                                    answer_summaries.join(" | "),
+                                ));
+                            }
+                        }
+                        Err(err) => {
+                            fields.push((
+                                "Parse Note".into(),
+                                format!("section parse failed: {}", err),
+                            ));
+                        }
+                    }
+
+                    layers.push(web::messages::LayerDetail {
+                        name: "DNS".into(),
+                        fields,
+                    });
+                }
             }
             protocol::TransportHeader::Icmp(hdr) => {
                 layers.push(web::messages::LayerDetail {
@@ -234,7 +296,10 @@ pub fn build_packet_data(
     (sample, stored)
 }
 
-fn summarise_packet(parsed: &protocol::ParsedPacket<'_>) -> (String, String, String, String) {
+fn summarise_packet(
+    parsed: &protocol::ParsedPacket<'_>,
+    dns: Option<&protocol::dns::DnsMessage<'_>>,
+) -> (String, String, String, String) {
     let mut proto;
     let mut src = String::new();
     let mut dst = String::new();
@@ -272,10 +337,15 @@ fn summarise_packet(parsed: &protocol::ParsedPacket<'_>) -> (String, String, Str
                 );
             }
             protocol::TransportHeader::Udp(hdr) => {
-                proto = "UDP".into();
+                if let Some(dns) = dns {
+                    proto = "DNS".into();
+                    info = protocol::dns::brief_summary(&dns);
+                } else {
+                    proto = "UDP".into();
+                    info = format!("len={}", hdr.length());
+                }
                 src.push_str(&format!(":{}", hdr.src_port()));
                 dst.push_str(&format!(":{}", hdr.dst_port()));
-                info = format!("len={}", hdr.length());
             }
             protocol::TransportHeader::Icmp(hdr) => {
                 proto = "ICMP".into();

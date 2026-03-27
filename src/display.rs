@@ -37,6 +37,11 @@ pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_
             }
             TransportHeader::Udp(hdr) => {
                 summary.push_str(&format!(" | UDP {}", hdr));
+                if let Some(dns) =
+                    protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
+                {
+                    summary.push_str(&format!(" | DNS {}", protocol::dns::brief_summary(&dns)));
+                }
             }
             TransportHeader::Icmp(hdr) => {
                 summary.push_str(&format!(" | ICMP {}", hdr));
@@ -151,6 +156,57 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("    Dest Port:    {}", hdr.dst_port());
                 println!("    Length:       {}", hdr.length());
                 println!("    Checksum:     0x{:04x}", hdr.checksum());
+
+                if let Some(dns) =
+                    protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
+                {
+                    println!("  DNS:");
+                    println!("    ID:           0x{:04x}", dns.id());
+                    println!(
+                        "    Message Type: {}",
+                        if dns.is_response() {
+                            "Response"
+                        } else {
+                            "Query"
+                        }
+                    );
+                    println!(
+                        "    Opcode/RCode: {}/{}",
+                        dns.opcode_name(),
+                        dns.rcode_name()
+                    );
+                    println!("    Flags:        {}", dns.flags_string());
+                    println!(
+                        "    Counts:       qd={} an={} ns={} ar={}",
+                        dns.question_count(),
+                        dns.answer_count(),
+                        dns.authority_count(),
+                        dns.additional_count()
+                    );
+
+                    match dns.parse_sections(2, 3, 0, 0) {
+                        Ok(sections) => {
+                            for (i, q) in sections.questions.iter().enumerate() {
+                                let qname =
+                                    q.name().unwrap_or_else(|_| "<invalid-name>".to_string());
+                                println!(
+                                    "    Question {}:   {} {} ({})",
+                                    i + 1,
+                                    q.qtype_label(),
+                                    qname,
+                                    q.qclass_label()
+                                );
+                            }
+
+                            for (i, rr) in sections.answers.iter().enumerate() {
+                                println!("    Answer {}:     {}", i + 1, rr.summary());
+                            }
+                        }
+                        Err(err) => {
+                            println!("    Parse Note:    section parse failed: {}", err);
+                        }
+                    }
+                }
             }
             TransportHeader::Icmp(hdr) => {
                 println!("  ICMP:");
