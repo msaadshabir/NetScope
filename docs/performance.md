@@ -105,12 +105,6 @@ cargo run --release -- --synthetic-flows 1000000
 
 This prints insertion time, estimated RSS, and a pass/fail check against the 500MB budget.
 
-For a test-target workflow, run the long ignored test:
-
-```bash
-cargo test --release memory_scale_1m -- --ignored --nocapture
-```
-
 ### CPU usage
 
 - Pipeline mode with auto-detected workers uses half the available CPU cores (clamped 1..8).
