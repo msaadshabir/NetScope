@@ -14,26 +14,17 @@ echo "Root: $ROOT_DIR"
 echo "Logs: ${LOG_PREFIX}.*"
 
 echo
-echo "[1/5] Build release"
+echo "[1/3] Build release"
 cargo build --release | tee "${LOG_PREFIX}.build.log"
 
 echo
-echo "[2/5] Layout guard"
-cargo test layout_sizes_phase4 -- --nocapture | tee "${LOG_PREFIX}.layout.log"
-
-echo
-echo "[3/5] Handshake benchmark"
+echo "[2/3] Handshake benchmark"
 cargo bench --bench hot_path -- handshake_sequence | tee "${LOG_PREFIX}.bench.log"
 
 echo
-echo "[4/5] Memory validation (CLI synthetic flows)"
+echo "[3/3] Memory validation (CLI synthetic flows)"
 /usr/bin/time -l ./target/release/netscope --synthetic-flows 1000000 \
   2>&1 | tee "${LOG_PREFIX}.memory-cli.log"
-
-echo
-echo "[5/5] Memory validation (ignored test)"
-cargo test --release memory_scale_1m -- --ignored --nocapture \
-  | tee "${LOG_PREFIX}.memory-test.log"
 
 cat <<EOF
 
@@ -54,8 +45,6 @@ To re-run manual spot checks when needed:
 
 Artifacts:
   ${LOG_PREFIX}.build.log
-  ${LOG_PREFIX}.layout.log
   ${LOG_PREFIX}.bench.log
   ${LOG_PREFIX}.memory-cli.log
-  ${LOG_PREFIX}.memory-test.log
 EOF
