@@ -4,6 +4,7 @@ pub mod icmp;
 pub mod ipv4;
 pub mod ipv6;
 pub mod tcp;
+pub mod tls;
 pub mod udp;
 
 use std::fmt;
