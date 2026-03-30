@@ -33,6 +33,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Pcap output now flushes periodically and on shutdown; flush failures abort capture instead of silently continuing.
 - IPv6 parsing now walks common extension headers to expose the effective transport protocol and payload offset.
 - Packet detail store now uses fixed-size O(1) slot storage keyed by packet id modulo capacity, with stale-id rejection outside the active window.
+- Local perf validation is now captured via `scripts/perf/validate.sh` (release build + representative benchmark + CLI synthetic-flow memory validation).
+
+### Removed
+- Removed low-signal and perf/size guard tests (including the ignored 1M-flow RSS budget test and layout size assertions).
 
 ## [0.2.0] - 2026-03-15
 
