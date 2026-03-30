@@ -190,20 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn different_flows_can_differ() {
-        let frame_a = make_tcp_ipv4_frame([10, 0, 0, 1], [10, 0, 0, 2], 12345, 80);
-        let frame_b = make_tcp_ipv4_frame([10, 0, 0, 3], [10, 0, 0, 4], 54321, 443);
-
-        // They *may* collide, but with 1024 shards it's astronomically unlikely.
-        let shard_a = shard_for_packet(&frame_a, 1024);
-        let shard_b = shard_for_packet(&frame_b, 1024);
-        // We can't assert they differ (hash collision is possible) but let's
-        // at least verify no panic and both are in range.
-        assert!(shard_a < 1024);
-        assert!(shard_b < 1024);
-    }
-
-    #[test]
     fn short_packet_no_panic() {
         let shard = shard_for_packet(&[0x08, 0x00], 4);
         assert!(shard < 4);

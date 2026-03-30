@@ -67,20 +67,22 @@ fn run_netscope(args: &[&str]) -> std::process::Output {
         .expect("failed to run netscope binary")
 }
 
-#[test]
-fn read_pcap_inline_mode() {
-    let pcap_path = temp_path("inline");
+fn run_read_pcap_test(name: &str, extra_args: &[&str]) {
+    let pcap_path = temp_path(name);
     write_test_pcap(&pcap_path);
 
-    let output = run_netscope(&[
+    let pcap_path_str = pcap_path
+        .to_str()
+        .expect("temp pcap path must be valid utf-8 for cli");
+    let mut args = vec![
         "--read-pcap",
-        pcap_path
-            .to_str()
-            .expect("temp pcap path must be valid utf-8 for cli"),
+        pcap_path_str,
         "--count",
         "1",
         "--quiet",
-    ]);
+    ];
+    args.extend_from_slice(extra_args);
+    let output = run_netscope(&args);
 
     if let Err(err) = std::fs::remove_file(&pcap_path) {
         eprintln!(
@@ -104,38 +106,11 @@ fn read_pcap_inline_mode() {
 }
 
 #[test]
+fn read_pcap_inline_mode() {
+    run_read_pcap_test("inline", &[]);
+}
+
+#[test]
 fn read_pcap_pipeline_mode() {
-    let pcap_path = temp_path("pipeline");
-    write_test_pcap(&pcap_path);
-
-    let output = run_netscope(&[
-        "--read-pcap",
-        pcap_path
-            .to_str()
-            .expect("temp pcap path must be valid utf-8 for cli"),
-        "--count",
-        "1",
-        "--quiet",
-        "--pipeline",
-    ]);
-
-    if let Err(err) = std::fs::remove_file(&pcap_path) {
-        eprintln!(
-            "warning: failed to delete temp pcap {}: {}",
-            pcap_path.display(),
-            err
-        );
-    }
-
-    assert!(
-        output.status.success(),
-        "expected success, got stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Packets captured:  1"),
-        "stdout was: {}",
-        stdout
-    );
+    run_read_pcap_test("pipeline", &["--pipeline"]);
 }

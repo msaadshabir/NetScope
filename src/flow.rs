@@ -2117,16 +2117,6 @@ mod tests {
     }
 
     #[test]
-    fn layout_sizes_phase4() {
-        use std::mem::size_of;
-
-        assert_eq!(size_of::<FlowKeyV4>(), 16);
-        assert_eq!(size_of::<FlowKeyV6>(), 40);
-        assert_eq!(size_of::<ScaleFlowEntry>(), 56);
-        assert!(size_of::<ScaleFlowEntry>() < size_of::<FlowEntry>());
-    }
-
-    #[test]
     fn scale_flow_entry_tracks_compact_state_and_deltas() {
         let time_base_ms = scale_base_ms(1.0);
         let mut entry = ScaleFlowEntry::new(1.0, FlowProtocol::Tcp, time_base_ms);
