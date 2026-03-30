@@ -5,8 +5,13 @@
 
 use crate::protocol::{self, NetworkHeader, ParsedPacket, TransportHeader, ethernet};
 
-/// Print a one-line summary of a parsed packet.
-pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_>) {
+fn build_packet_summary_line(
+    index: u64,
+    timestamp: f64,
+    packet: &ParsedPacket<'_>,
+    dns: Option<&protocol::dns::DnsMessage<'_>>,
+    tls: Option<&protocol::tls::TlsClientHelloInfo>,
+) -> String {
     let ts = format_timestamp(timestamp);
 
     // Build the summary line
@@ -34,13 +39,14 @@ pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_
         match transport {
             TransportHeader::Tcp(hdr) => {
                 summary.push_str(&format!(" | TCP {}", hdr));
+                if let Some(tls) = tls {
+                    summary.push_str(&format!(" | TLS ClientHello sni={}", tls.sni));
+                }
             }
             TransportHeader::Udp(hdr) => {
                 summary.push_str(&format!(" | UDP {}", hdr));
-                if let Some(dns) =
-                    protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
-                {
-                    summary.push_str(&format!(" | DNS {}", protocol::dns::brief_summary(&dns)));
+                if let Some(dns) = dns {
+                    summary.push_str(&format!(" | DNS {}", protocol::dns::brief_summary(dns)));
                 }
             }
             TransportHeader::Icmp(hdr) => {
@@ -54,13 +60,54 @@ pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_
         summary.push_str(&format!(" | payload: {} bytes", packet.payload.len()));
     }
 
+    summary
+}
+
+/// Print a one-line summary of a parsed packet.
+pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_>) {
+    let dns_msg = match &packet.transport {
+        Some(TransportHeader::Udp(hdr)) => {
+            protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
+        }
+        _ => None,
+    };
+    let tls_info = match &packet.transport {
+        Some(TransportHeader::Tcp(_)) => protocol::tls::parse_client_hello_sni(packet.payload),
+        _ => None,
+    };
+
+    let summary = build_packet_summary_line(
+        index,
+        timestamp,
+        packet,
+        dns_msg.as_ref(),
+        tls_info.as_ref(),
+    );
     println!("{}", summary);
 }
 
 /// Print a detailed view of a parsed packet, including hex dump.
 pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: &ParsedPacket<'_>) {
+    let dns_msg = match &packet.transport {
+        Some(TransportHeader::Udp(hdr)) => {
+            protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
+        }
+        _ => None,
+    };
+    let tls_info = match &packet.transport {
+        Some(TransportHeader::Tcp(_)) => protocol::tls::parse_client_hello_sni(packet.payload),
+        _ => None,
+    };
+
     println!("{}", "=".repeat(80));
-    print_packet_summary(index, timestamp, packet);
+    let summary = build_packet_summary_line(
+        index,
+        timestamp,
+        packet,
+        dns_msg.as_ref(),
+        tls_info.as_ref(),
+    );
+    println!("{}", summary);
     println!("{}", "-".repeat(80));
 
     // Ethernet details
@@ -149,6 +196,13 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                     hdr.data_offset(),
                     hdr.header_len()
                 );
+
+                if let Some(tls) = &tls_info {
+                    println!("  TLS:");
+                    println!("    Type:         ClientHello");
+                    println!("    Legacy Ver:   0x{:04x}", tls.legacy_version);
+                    println!("    SNI:          {}", tls.sni);
+                }
             }
             TransportHeader::Udp(hdr) => {
                 println!("  UDP:");
@@ -157,9 +211,7 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("    Length:       {}", hdr.length());
                 println!("    Checksum:     0x{:04x}", hdr.checksum());
 
-                if let Some(dns) =
-                    protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
-                {
+                if let Some(dns) = &dns_msg {
                     println!("  DNS:");
                     println!("    ID:           0x{:04x}", dns.id());
                     println!(

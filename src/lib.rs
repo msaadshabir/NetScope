@@ -88,7 +88,14 @@ pub fn build_packet_data(
         }
         _ => None,
     };
-    let (proto_str, src_str, dst_str, info_str) = summarise_packet(parsed, dns.as_ref());
+    let tls = match &parsed.transport {
+        Some(protocol::TransportHeader::Tcp(_)) => {
+            protocol::tls::parse_client_hello_sni(parsed.payload)
+        }
+        _ => None,
+    };
+    let (proto_str, src_str, dst_str, info_str) =
+        summarise_packet(parsed, dns.as_ref(), tls.as_ref());
 
     let sample = web::messages::PacketSample {
         id,
@@ -201,6 +208,20 @@ pub fn build_packet_data(
                         ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
                     ],
                 });
+
+                if let Some(tls) = &tls {
+                    layers.push(web::messages::LayerDetail {
+                        name: "TLS".into(),
+                        fields: vec![
+                            ("Type".into(), "ClientHello".into()),
+                            (
+                                "Legacy Version".into(),
+                                format!("0x{:04x}", tls.legacy_version),
+                            ),
+                            ("SNI".into(), tls.sni.clone()),
+                        ],
+                    });
+                }
             }
             protocol::TransportHeader::Udp(hdr) => {
                 layers.push(web::messages::LayerDetail {
@@ -299,6 +320,7 @@ pub fn build_packet_data(
 fn summarise_packet(
     parsed: &protocol::ParsedPacket<'_>,
     dns: Option<&protocol::dns::DnsMessage<'_>>,
+    tls: Option<&protocol::tls::TlsClientHelloInfo>,
 ) -> (String, String, String, String) {
     let mut proto;
     let mut src = String::new();
@@ -325,16 +347,21 @@ fn summarise_packet(
     if let Some(transport) = &parsed.transport {
         match transport {
             protocol::TransportHeader::Tcp(hdr) => {
-                proto = "TCP".into();
+                if let Some(tls) = tls {
+                    proto = "TLS".into();
+                    info = format!("ClientHello sni={}", tls.sni);
+                } else {
+                    proto = "TCP".into();
+                    info = format!(
+                        "{} seq={} ack={} win={}",
+                        hdr.flags_string(),
+                        hdr.sequence_number(),
+                        hdr.ack_number(),
+                        hdr.window_size()
+                    );
+                }
                 src.push_str(&format!(":{}", hdr.src_port()));
                 dst.push_str(&format!(":{}", hdr.dst_port()));
-                info = format!(
-                    "{} seq={} ack={} win={}",
-                    hdr.flags_string(),
-                    hdr.sequence_number(),
-                    hdr.ack_number(),
-                    hdr.window_size()
-                );
             }
             protocol::TransportHeader::Udp(hdr) => {
                 if let Some(dns) = dns {
