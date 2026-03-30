@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `--expired-flows-jsonl <PATH>` to continuously write expired/evicted flow records as JSONL during capture (includes `reason = timeout | eviction`).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 - DNS (UDP/53) decoding in CLI packet views and the web packet inspector.
+- TLS ClientHello SNI extraction in CLI packet views and the web packet inspector (best-effort, packet-level; no TCP reassembly; ECH can hide SNI).
 
 ### Fixed
 - Avoid duplicate DNS parsing when building web packet summaries + details.

@@ -32,6 +32,14 @@ sudo netscope -f "udp port 53" -c 20
 
 For per-packet DNS detail output, use `-vv`.
 
+Capture TLS handshakes and show ClientHello SNI in packet summaries/details:
+
+```bash
+sudo netscope -f "tcp port 443" -c 20 -vv
+```
+
+TLS SNI parsing is best-effort and packet-level (no TCP reassembly), so split ClientHello messages may not decode. ECH can hide the real SNI, and NetScope only surfaces SNI values that look like valid ASCII hostnames (labels `A-Za-z0-9-`; underscores/spaces are rejected).
+
 ## Offline pcap Analysis
 
 Read packets from a pcap file (no sudo required):
