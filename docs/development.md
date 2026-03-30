@@ -68,6 +68,8 @@ cargo build --release    # Optimized build
 cargo test
 ```
 
+For local performance/memory sanity checks, use `scripts/perf/validate.sh` (release build + a representative hot-path benchmark + synthetic-flow memory validation). These checks are intentionally separate from the unit/integration test suite.
+
 Tests are co-located with the source code in `#[cfg(test)]` modules. Key test areas:
 
 - `src/flow.rs` -- flow key ordering, TCP state transitions, sequence tracking, RTT sampling.

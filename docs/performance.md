@@ -43,6 +43,14 @@ This runs the Criterion benchmarks defined in `benches/hot_path.rs`. Results are
 
 For repeatable end-to-end checks (pcap replay throughput, web dashboard fps/latency, etc.), see `scripts/perf/`.
 
+For a single command that captures a small set of representative local checks (release build, one hot-path benchmark, and synthetic-flow memory validation), run:
+
+```bash
+scripts/perf/validate.sh
+```
+
+Logs are written under `tmp/perf/`.
+
 To run a specific benchmark:
 
 ```bash
