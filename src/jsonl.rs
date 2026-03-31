@@ -17,8 +17,7 @@ impl JsonlSink {
     }
 
     pub fn write<T: Serialize>(&mut self, record: &T) -> Result<(), std::io::Error> {
-        let line = serde_json::to_string(record)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let line = serde_json::to_string(record).map_err(std::io::Error::other)?;
         writeln!(self.writer, "{}", line)
     }
 

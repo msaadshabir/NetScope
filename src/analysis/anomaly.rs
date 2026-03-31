@@ -68,19 +68,20 @@ impl AnomalyDetector {
 
         let syn_is_new = tcp_syn && !tcp_ack;
 
-        if self.config.syn_flood.enabled && protocol == FlowProtocol::Tcp && syn_is_new {
-            if let Some(alert) = self.syn_flood.observe(ts, src.ip, dst.ip, dst.port) {
-                alerts.push(alert);
-            }
+        if self.config.syn_flood.enabled
+            && protocol == FlowProtocol::Tcp
+            && syn_is_new
+            && let Some(alert) = self.syn_flood.observe(ts, src.ip, dst.ip, dst.port)
+        {
+            alerts.push(alert);
         }
 
-        if self.config.port_scan.enabled {
-            if let Some(alert) = self
+        if self.config.port_scan.enabled
+            && let Some(alert) = self
                 .port_scan
                 .observe(ts, protocol, src.ip, dst.ip, dst.port, syn_is_new)
-            {
-                alerts.push(alert);
-            }
+        {
+            alerts.push(alert);
         }
 
         if let Some(sink) = &mut self.alert_sink {
@@ -158,10 +159,10 @@ impl SynFloodState {
 
     fn observe(&mut self, ts: f64, src_ip: IpAddr, dst_ip: IpAddr, dst_port: u16) -> Option<Alert> {
         let key = SynFloodKey { dst_ip, dst_port };
-        if let Some(until) = self.cooldowns.get(&key) {
-            if *until > ts {
-                return None;
-            }
+        if let Some(until) = self.cooldowns.get(&key)
+            && *until > ts
+        {
+            return None;
         }
 
         let window = self.config.window_secs.max(0.1);
@@ -221,8 +222,6 @@ struct PortScanEvent {
     ts: f64,
     dst_ip: IpAddr,
     dst_port: u16,
-    protocol: FlowProtocol,
-    syn_only: bool,
 }
 
 impl PortScanState {
@@ -243,10 +242,10 @@ impl PortScanState {
         dst_port: u16,
         syn_only: bool,
     ) -> Option<Alert> {
-        if let Some(until) = self.cooldowns.get(&src_ip) {
-            if *until > ts {
-                return None;
-            }
+        if let Some(until) = self.cooldowns.get(&src_ip)
+            && *until > ts
+        {
+            return None;
         }
 
         if protocol == FlowProtocol::Tcp && !syn_only {
@@ -259,8 +258,6 @@ impl PortScanState {
             ts,
             dst_ip,
             dst_port,
-            protocol,
-            syn_only,
         });
 
         while let Some(front) = events.front() {

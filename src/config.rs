@@ -35,6 +35,7 @@ impl std::error::Error for ConfigError {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub capture: CaptureConfig,
     pub run: RunConfig,
@@ -44,21 +45,6 @@ pub struct Config {
     pub analysis: AnalysisConfig,
     pub web: WebConfig,
     pub pipeline: PipelineConfig,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            capture: CaptureConfig::default(),
-            run: RunConfig::default(),
-            output: OutputConfig::default(),
-            flow: FlowConfig::default(),
-            stats: StatsConfig::default(),
-            analysis: AnalysisConfig::default(),
-            web: WebConfig::default(),
-            pipeline: PipelineConfig::default(),
-        }
-    }
 }
 
 impl Config {
@@ -112,18 +98,14 @@ impl CaptureConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct RunConfig {
     pub count: u64,
 }
 
-impl Default for RunConfig {
-    fn default() -> Self {
-        RunConfig { count: 0 }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct OutputConfig {
     #[serde(deserialize_with = "empty_path_none")]
     pub write_pcap: Option<PathBuf>,
@@ -135,19 +117,6 @@ pub struct OutputConfig {
     pub expired_flows_jsonl: Option<PathBuf>,
     pub hex_dump: bool,
     pub quiet: bool,
-}
-
-impl Default for OutputConfig {
-    fn default() -> Self {
-        OutputConfig {
-            write_pcap: None,
-            export_json: None,
-            export_csv: None,
-            expired_flows_jsonl: None,
-            hex_dump: false,
-            quiet: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,20 +178,11 @@ impl Default for AnalysisConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct AnomalyConfig {
     pub enabled: bool,
     pub syn_flood: SynFloodConfig,
     pub port_scan: PortScanConfig,
-}
-
-impl Default for AnomalyConfig {
-    fn default() -> Self {
-        AnomalyConfig {
-            enabled: false,
-            syn_flood: SynFloodConfig::default(),
-            port_scan: PortScanConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

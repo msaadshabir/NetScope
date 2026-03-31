@@ -132,7 +132,7 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
                 }
             });
         })
-        .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+        .map_err(std::io::Error::other)?;
 
     Ok(WebHandle { event_tx })
 }
@@ -221,10 +221,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
         version: env!("CARGO_PKG_VERSION").to_string(),
         tick_ms: state.tick_ms,
     };
-    if let Ok(json) = serde_json::to_string(&hello) {
-        if socket.send(Message::Text(json.into())).await.is_err() {
-            return;
-        }
+    if let Ok(json) = serde_json::to_string(&hello)
+        && socket.send(Message::Text(json.into())).await.is_err()
+    {
+        return;
     }
 
     // Subscribe to broadcast
@@ -267,11 +267,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         broadcast_rx = state.broadcast_tx.subscribe();
                         // Resync by sending the newest merged frame instead of replaying history.
                         if let Some(frame) = { state.latest_frame.lock().await.clone() } {
-                            if let Some(seq) = frame.frame_seq {
-                                if last_sent_frame_seq == Some(seq) {
+                            if let Some(seq) = frame.frame_seq
+                                && last_sent_frame_seq == Some(seq) {
                                     continue;
                                 }
-                            }
                             last_sent_frame_seq = frame.frame_seq.or(last_sent_frame_seq);
                             if socket
                                 .send(Message::Text(frame.json.as_ref().to_owned().into()))
@@ -306,11 +305,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                         }
                                     };
                                     drop(store);
-                                    if let Ok(json) = serde_json::to_string(&response) {
-                                        if socket.send(Message::Text(json.into())).await.is_err() {
+                                    if let Ok(json) = serde_json::to_string(&response)
+                                        && socket.send(Message::Text(json.into())).await.is_err() {
                                             break;
                                         }
-                                    }
                                 }
                                 WsClientMsg::PerfPing { client_ts } => {
                                     let server_ts = std::time::SystemTime::now()
@@ -321,11 +319,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                         client_ts,
                                         server_ts,
                                     };
-                                    if let Ok(json) = serde_json::to_string(&response) {
-                                        if socket.send(Message::Text(json.into())).await.is_err() {
+                                    if let Ok(json) = serde_json::to_string(&response)
+                                        && socket.send(Message::Text(json.into())).await.is_err() {
                                             break;
                                         }
-                                    }
                                 }
                             }
                         }

@@ -185,10 +185,10 @@ impl Worker {
                 // Flow tracking
                 self.flow_tracker.observe(pkt.ts, pkt.wire_len, &parsed);
 
-                if self.heavy_hitter_top_n > 0 {
-                    if let Some(key) = crate::flow::flow_compact_key_from_packet(&parsed) {
-                        self.top_flows_hh.observe(&key, pkt.wire_len);
-                    }
+                if self.heavy_hitter_top_n > 0
+                    && let Some(key) = crate::flow::flow_compact_key_from_packet(&parsed)
+                {
+                    self.top_flows_hh.observe(&key, pkt.wire_len);
                 }
 
                 // Packet sampling for web dashboard.
@@ -197,7 +197,7 @@ impl Worker {
                 // not a per-shard rate that would produce N*sample_rate samples.
                 if self.web_cfg.enabled
                     && self.web_cfg.sample_rate > 0
-                    && pkt.id % self.web_cfg.sample_rate == 0
+                    && pkt.id.is_multiple_of(self.web_cfg.sample_rate)
                 {
                     let (sample, stored) = crate::build_packet_data(
                         pkt.id,

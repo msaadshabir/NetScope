@@ -74,13 +74,7 @@ fn run_read_pcap_test(name: &str, extra_args: &[&str]) {
     let pcap_path_str = pcap_path
         .to_str()
         .expect("temp pcap path must be valid utf-8 for cli");
-    let mut args = vec![
-        "--read-pcap",
-        pcap_path_str,
-        "--count",
-        "1",
-        "--quiet",
-    ];
+    let mut args = vec!["--read-pcap", pcap_path_str, "--count", "1", "--quiet"];
     args.extend_from_slice(extra_args);
     let output = run_netscope(&args);
 

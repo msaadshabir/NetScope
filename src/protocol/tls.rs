@@ -143,7 +143,7 @@ fn parse_client_hello_body(body: &[u8]) -> Result<TlsClientHelloInfo, ParseError
     // cipher_suites
     ensure_len(body, offset, 2, "tls cipher_suites length")?;
     let cipher_suites_len = read_u16(body, offset) as usize;
-    if cipher_suites_len == 0 || cipher_suites_len % 2 != 0 {
+    if cipher_suites_len == 0 || !cipher_suites_len.is_multiple_of(2) {
         return Err(ParseError::InvalidHeader(format!(
             "tls cipher_suites length invalid: {}",
             cipher_suites_len

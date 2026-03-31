@@ -43,7 +43,7 @@ impl SpaceSavingTopFlows {
         }
 
         if self.counters.len() < self.capacity {
-            self.counters.insert(key.clone(), Counter { bytes });
+            self.counters.insert(*key, Counter { bytes });
             return;
         }
 
@@ -51,7 +51,7 @@ impl SpaceSavingTopFlows {
             .counters
             .iter()
             .min_by_key(|(_, counter)| counter.bytes)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
         {
             let min_bytes = self
                 .counters
@@ -59,7 +59,7 @@ impl SpaceSavingTopFlows {
                 .map(|counter| counter.bytes)
                 .unwrap_or(0);
             self.counters.insert(
-                key.clone(),
+                *key,
                 Counter {
                     bytes: min_bytes.saturating_add(bytes),
                 },
@@ -77,7 +77,7 @@ impl SpaceSavingTopFlows {
         let mut top: Vec<(CompactFlowKey, u64)> = self
             .counters
             .iter()
-            .map(|(key, counter)| (key.clone(), counter.bytes))
+            .map(|(key, counter)| (*key, counter.bytes))
             .collect();
 
         top.sort_unstable_by(|a, b| b.1.cmp(&a.1));
