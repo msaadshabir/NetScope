@@ -7,6 +7,7 @@ pub mod display;
 pub mod flow;
 pub mod jsonl;
 pub mod memory;
+pub mod packet_format;
 pub mod pipeline;
 pub mod protocol;
 pub mod web;
@@ -82,20 +83,9 @@ pub fn build_packet_data(
     parsed: &protocol::ParsedPacket<'_>,
     max_payload_bytes: usize,
 ) -> (web::messages::PacketSample, web::messages::StoredPacket) {
-    let dns = match &parsed.transport {
-        Some(protocol::TransportHeader::Udp(hdr)) => {
-            protocol::dns::parse_dns_udp(parsed.payload, hdr.src_port(), hdr.dst_port())
-        }
-        _ => None,
-    };
-    let tls = match &parsed.transport {
-        Some(protocol::TransportHeader::Tcp(_)) => {
-            protocol::tls::parse_client_hello_sni(parsed.payload)
-        }
-        _ => None,
-    };
+    let (dns, tls) = packet_format::parse_dns_and_tls(parsed);
     let (proto_str, src_str, dst_str, info_str) =
-        summarise_packet(parsed, dns.as_ref(), tls.as_ref());
+        packet_format::summarise_packet(parsed, dns.as_ref(), tls.as_ref());
 
     let sample = web::messages::PacketSample {
         id,
@@ -305,7 +295,7 @@ pub fn build_packet_data(
 
     // Hex dump (truncated)
     let dump_len = raw_data.len().min(max_payload_bytes);
-    let hex_dump = format_hex_dump(&raw_data[..dump_len]);
+    let hex_dump = packet_format::format_hex_dump(&raw_data[..dump_len]);
 
     let stored = web::messages::StoredPacket {
         id,
@@ -315,106 +305,4 @@ pub fn build_packet_data(
     };
 
     (sample, stored)
-}
-
-fn summarise_packet(
-    parsed: &protocol::ParsedPacket<'_>,
-    dns: Option<&protocol::dns::DnsMessage<'_>>,
-    tls: Option<&protocol::tls::TlsClientHelloInfo>,
-) -> (String, String, String, String) {
-    let mut proto;
-    let mut src = String::new();
-    let mut dst = String::new();
-    let mut info = String::new();
-
-    if let Some(net) = &parsed.network {
-        match net {
-            protocol::NetworkHeader::Ipv4(hdr) => {
-                proto = "IPv4".to_string();
-                src = format!("{}", hdr.src_addr());
-                dst = format!("{}", hdr.dst_addr());
-            }
-            protocol::NetworkHeader::Ipv6(hdr) => {
-                proto = "IPv6".to_string();
-                src = format!("{}", hdr.src_addr());
-                dst = format!("{}", hdr.dst_addr());
-            }
-        }
-    } else {
-        proto = format!("{}", parsed.ethernet.ether_type());
-    }
-
-    if let Some(transport) = &parsed.transport {
-        match transport {
-            protocol::TransportHeader::Tcp(hdr) => {
-                if let Some(tls) = tls {
-                    proto = "TLS".into();
-                    info = format!("ClientHello sni={}", tls.sni);
-                } else {
-                    proto = "TCP".into();
-                    info = format!(
-                        "{} seq={} ack={} win={}",
-                        hdr.flags_string(),
-                        hdr.sequence_number(),
-                        hdr.ack_number(),
-                        hdr.window_size()
-                    );
-                }
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
-            }
-            protocol::TransportHeader::Udp(hdr) => {
-                if let Some(dns) = dns {
-                    proto = "DNS".into();
-                    info = protocol::dns::brief_summary(&dns);
-                } else {
-                    proto = "UDP".into();
-                    info = format!("len={}", hdr.length());
-                }
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
-            }
-            protocol::TransportHeader::Icmp(hdr) => {
-                proto = "ICMP".into();
-                info = format!("{}", hdr);
-            }
-        }
-    }
-
-    (proto, src, dst, info)
-}
-
-/// Format raw bytes as a hex dump string suitable for display.
-fn format_hex_dump(data: &[u8]) -> String {
-    let mut out = String::new();
-    for offset in (0..data.len()).step_by(16) {
-        let end = (offset + 16).min(data.len());
-        let chunk = &data[offset..end];
-
-        out.push_str(&format!("{:04x}  ", offset));
-
-        for (i, byte) in chunk.iter().enumerate() {
-            out.push_str(&format!("{:02x} ", byte));
-            if i == 7 {
-                out.push(' ');
-            }
-        }
-        for i in chunk.len()..16 {
-            out.push_str("   ");
-            if i == 7 {
-                out.push(' ');
-            }
-        }
-
-        out.push_str(" |");
-        for byte in chunk {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                out.push(*byte as char);
-            } else {
-                out.push('.');
-            }
-        }
-        out.push_str("|\n");
-    }
-    out
 }

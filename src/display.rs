@@ -3,6 +3,7 @@
 //! Formats parsed packets into human-readable one-line summaries
 //! and optional detailed views with hex dumps.
 
+use crate::packet_format;
 use crate::protocol::{self, NetworkHeader, ParsedPacket, TransportHeader, ethernet};
 
 fn build_packet_summary_line(
@@ -12,7 +13,7 @@ fn build_packet_summary_line(
     dns: Option<&protocol::dns::DnsMessage<'_>>,
     tls: Option<&protocol::tls::TlsClientHelloInfo>,
 ) -> String {
-    let ts = format_timestamp(timestamp);
+    let ts = packet_format::format_timestamp(timestamp);
 
     // Build the summary line
     let mut summary = format!("#{:<6} {} Eth: {}", index, ts, packet.ethernet);
@@ -65,16 +66,7 @@ fn build_packet_summary_line(
 
 /// Print a one-line summary of a parsed packet.
 pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_>) {
-    let dns_msg = match &packet.transport {
-        Some(TransportHeader::Udp(hdr)) => {
-            protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
-        }
-        _ => None,
-    };
-    let tls_info = match &packet.transport {
-        Some(TransportHeader::Tcp(_)) => protocol::tls::parse_client_hello_sni(packet.payload),
-        _ => None,
-    };
+    let (dns_msg, tls_info) = packet_format::parse_dns_and_tls(packet);
 
     let summary = build_packet_summary_line(
         index,
@@ -88,16 +80,7 @@ pub fn print_packet_summary(index: u64, timestamp: f64, packet: &ParsedPacket<'_
 
 /// Print a detailed view of a parsed packet, including hex dump.
 pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: &ParsedPacket<'_>) {
-    let dns_msg = match &packet.transport {
-        Some(TransportHeader::Udp(hdr)) => {
-            protocol::dns::parse_dns_udp(packet.payload, hdr.src_port(), hdr.dst_port())
-        }
-        _ => None,
-    };
-    let tls_info = match &packet.transport {
-        Some(TransportHeader::Tcp(_)) => protocol::tls::parse_client_hello_sni(packet.payload),
-        _ => None,
-    };
+    let (dns_msg, tls_info) = packet_format::parse_dns_and_tls(packet);
 
     println!("{}", "=".repeat(80));
     let summary = build_packet_summary_line(
@@ -281,60 +264,14 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
 
 /// Print a hex dump with offsets, hex values, and ASCII representation.
 fn print_hex_dump(data: &[u8]) {
-    // Limit hex dump to first 256 bytes for readability
     let display_len = data.len().min(256);
-
-    for offset in (0..display_len).step_by(16) {
-        let end = (offset + 16).min(display_len);
-        let chunk = &data[offset..end];
-
-        // Offset
-        print!("    {:04x}  ", offset);
-
-        // Hex bytes
-        for (i, byte) in chunk.iter().enumerate() {
-            print!("{:02x} ", byte);
-            if i == 7 {
-                print!(" ");
-            }
-        }
-
-        // Padding for incomplete lines
-        for i in chunk.len()..16 {
-            print!("   ");
-            if i == 7 {
-                print!(" ");
-            }
-        }
-
-        // ASCII representation
-        print!(" |");
-        for byte in chunk {
-            if byte.is_ascii_graphic() || *byte == b' ' {
-                print!("{}", *byte as char);
-            } else {
-                print!(".");
-            }
-        }
-        println!("|");
+    let hex = packet_format::format_hex_dump(&data[..display_len]);
+    for line in hex.lines() {
+        println!("    {}", line);
     }
-
     if display_len < data.len() {
         println!("    ... ({} bytes remaining)", data.len() - display_len);
     }
-}
-
-/// Format a pcap timestamp (seconds since epoch) into a readable time.
-fn format_timestamp(ts: f64) -> String {
-    let secs = ts as u64;
-    let micros = ((ts - secs as f64) * 1_000_000.0) as u32;
-
-    // Simple HH:MM:SS.microseconds format (UTC-based from epoch)
-    let hours = (secs % 86400) / 3600;
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-
-    format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, micros)
 }
 
 /// Print a compact one-line summary for a packet that failed to parse.
@@ -344,7 +281,7 @@ pub fn print_parse_error(
     data_len: usize,
     error: &protocol::ParseError,
 ) {
-    let ts = format_timestamp(timestamp);
+    let ts = packet_format::format_timestamp(timestamp);
     println!(
         "#{:<6} {} [PARSE ERROR] {} bytes: {}",
         index, ts, data_len, error
