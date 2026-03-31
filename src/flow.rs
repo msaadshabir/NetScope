@@ -4,250 +4,14 @@ use serde::Serialize;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt;
-use std::fs::File;
-use std::io::{BufWriter, Write};
 use std::net::IpAddr;
-use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-pub struct Endpoint {
-    pub ip: IpAddr,
-    pub port: u16,
-}
+mod export;
+mod key;
 
-impl fmt::Display for Endpoint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.ip, self.port)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FlowProtocol {
-    Tcp,
-    Udp,
-}
-
-impl fmt::Display for FlowProtocol {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FlowProtocol::Tcp => write!(f, "tcp"),
-            FlowProtocol::Udp => write!(f, "udp"),
-        }
-    }
-}
-
-impl FlowProtocol {
-    #[inline]
-    fn as_u8(self) -> u8 {
-        match self {
-            FlowProtocol::Tcp => 6,
-            FlowProtocol::Udp => 17,
-        }
-    }
-
-    #[inline]
-    fn from_u8(value: u8) -> Option<Self> {
-        match value {
-            6 => Some(FlowProtocol::Tcp),
-            17 => Some(FlowProtocol::Udp),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowDirection {
-    AtoB,
-    BtoA,
-}
-
-impl fmt::Display for FlowDirection {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            FlowDirection::AtoB => write!(f, "a_to_b"),
-            FlowDirection::BtoA => write!(f, "b_to_a"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct FlowKey {
-    pub protocol: FlowProtocol,
-    pub a: Endpoint,
-    pub b: Endpoint,
-}
-
-impl fmt::Display for FlowKey {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {} <-> {}", self.protocol, self.a, self.b)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(C)]
-pub(crate) struct FlowKeyV4 {
-    a_ip: u32,
-    b_ip: u32,
-    a_port: u16,
-    b_port: u16,
-    proto: u8,
-    _pad: [u8; 3],
-}
-
-impl FlowKeyV4 {
-    #[inline]
-    fn new(
-        protocol: FlowProtocol,
-        src_ip: std::net::Ipv4Addr,
-        src_port: u16,
-        dst_ip: std::net::Ipv4Addr,
-        dst_port: u16,
-    ) -> (Self, FlowDirection) {
-        let src = (u32::from_be_bytes(src_ip.octets()), src_port);
-        let dst = (u32::from_be_bytes(dst_ip.octets()), dst_port);
-        if src <= dst {
-            (
-                FlowKeyV4 {
-                    a_ip: src.0,
-                    b_ip: dst.0,
-                    a_port: src.1,
-                    b_port: dst.1,
-                    proto: protocol.as_u8(),
-                    _pad: [0; 3],
-                },
-                FlowDirection::AtoB,
-            )
-        } else {
-            (
-                FlowKeyV4 {
-                    a_ip: dst.0,
-                    b_ip: src.0,
-                    a_port: dst.1,
-                    b_port: src.1,
-                    proto: protocol.as_u8(),
-                    _pad: [0; 3],
-                },
-                FlowDirection::BtoA,
-            )
-        }
-    }
-
-    #[inline]
-    fn from_flow_key(key: &FlowKey) -> Option<Self> {
-        let (a, b) = match (key.a.ip, key.b.ip) {
-            (IpAddr::V4(a), IpAddr::V4(b)) => (a, b),
-            _ => return None,
-        };
-        Some(FlowKeyV4 {
-            a_ip: u32::from_be_bytes(a.octets()),
-            b_ip: u32::from_be_bytes(b.octets()),
-            a_port: key.a.port,
-            b_port: key.b.port,
-            proto: key.protocol.as_u8(),
-            _pad: [0; 3],
-        })
-    }
-
-    #[inline]
-    fn to_flow_key(self) -> FlowKey {
-        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
-        FlowKey {
-            protocol,
-            a: Endpoint {
-                ip: IpAddr::V4(std::net::Ipv4Addr::from(self.a_ip.to_be_bytes())),
-                port: self.a_port,
-            },
-            b: Endpoint {
-                ip: IpAddr::V4(std::net::Ipv4Addr::from(self.b_ip.to_be_bytes())),
-                port: self.b_port,
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(C)]
-pub(crate) struct FlowKeyV6 {
-    a_ip: [u8; 16],
-    b_ip: [u8; 16],
-    a_port: u16,
-    b_port: u16,
-    proto: u8,
-    _pad: [u8; 3],
-}
-
-impl FlowKeyV6 {
-    #[inline]
-    fn new(
-        protocol: FlowProtocol,
-        src_ip: std::net::Ipv6Addr,
-        src_port: u16,
-        dst_ip: std::net::Ipv6Addr,
-        dst_port: u16,
-    ) -> (Self, FlowDirection) {
-        let src = (src_ip.octets(), src_port);
-        let dst = (dst_ip.octets(), dst_port);
-        if src <= dst {
-            (
-                FlowKeyV6 {
-                    a_ip: src.0,
-                    b_ip: dst.0,
-                    a_port: src.1,
-                    b_port: dst.1,
-                    proto: protocol.as_u8(),
-                    _pad: [0; 3],
-                },
-                FlowDirection::AtoB,
-            )
-        } else {
-            (
-                FlowKeyV6 {
-                    a_ip: dst.0,
-                    b_ip: src.0,
-                    a_port: dst.1,
-                    b_port: src.1,
-                    proto: protocol.as_u8(),
-                    _pad: [0; 3],
-                },
-                FlowDirection::BtoA,
-            )
-        }
-    }
-
-    #[inline]
-    fn from_flow_key(key: &FlowKey) -> Option<Self> {
-        let (a, b) = match (key.a.ip, key.b.ip) {
-            (IpAddr::V6(a), IpAddr::V6(b)) => (a, b),
-            _ => return None,
-        };
-        Some(FlowKeyV6 {
-            a_ip: a.octets(),
-            b_ip: b.octets(),
-            a_port: key.a.port,
-            b_port: key.b.port,
-            proto: key.protocol.as_u8(),
-            _pad: [0; 3],
-        })
-    }
-
-    #[inline]
-    fn to_flow_key(self) -> FlowKey {
-        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
-        FlowKey {
-            protocol,
-            a: Endpoint {
-                ip: IpAddr::V6(std::net::Ipv6Addr::from(self.a_ip)),
-                port: self.a_port,
-            },
-            b: Endpoint {
-                ip: IpAddr::V6(std::net::Ipv6Addr::from(self.b_ip)),
-                port: self.b_port,
-            },
-        }
-    }
-}
+pub use export::{write_flow_csv, write_flow_json};
+pub(crate) use key::{CompactFlowKey, FlowKeyV4, FlowKeyV6};
+pub use key::{Endpoint, FlowDirection, FlowKey, FlowProtocol};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -564,6 +328,7 @@ impl FlowEntry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn observe_tcp(
         &mut self,
         ts: f64,
@@ -755,33 +520,6 @@ pub struct FlowDelta {
     pub delta_bytes: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum CompactFlowKey {
-    V4(FlowKeyV4),
-    V6(FlowKeyV6),
-}
-
-impl CompactFlowKey {
-    #[inline]
-    pub(crate) fn from_flow_key(key: &FlowKey) -> Option<Self> {
-        if let Some(v4) = FlowKeyV4::from_flow_key(key) {
-            return Some(CompactFlowKey::V4(v4));
-        }
-        if let Some(v6) = FlowKeyV6::from_flow_key(key) {
-            return Some(CompactFlowKey::V6(v6));
-        }
-        None
-    }
-
-    #[inline]
-    pub(crate) fn to_flow_key(self) -> FlowKey {
-        match self {
-            CompactFlowKey::V4(key) => key.to_flow_key(),
-            CompactFlowKey::V6(key) => key.to_flow_key(),
-        }
-    }
-}
-
 #[derive(Debug)]
 enum FlowStore {
     Full(AHashMap<FlowKey, FlowEntry>),
@@ -853,6 +591,10 @@ impl FlowTracker {
                 flows_v4, flows_v6, ..
             } => flows_v4.len() + flows_v6.len(),
         }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn is_scale_mode(&self) -> bool {
@@ -980,21 +722,20 @@ impl FlowTracker {
                     .entry(key)
                     .or_insert_with(|| FlowEntry::new(ts, protocol));
                 entry.observe(ts, direction, wire_len, flags);
-                if protocol == FlowProtocol::Tcp {
-                    if let (Some(seq), Some(seq_len)) = (seq, seq_len) {
-                        if self.track_rtt || self.track_retrans || self.track_out_of_order {
-                            entry.observe_tcp(
-                                ts,
-                                direction,
-                                seq,
-                                ack,
-                                seq_len,
-                                self.track_rtt,
-                                self.track_retrans,
-                                self.track_out_of_order,
-                            );
-                        }
-                    }
+                if protocol == FlowProtocol::Tcp
+                    && let (Some(seq), Some(seq_len)) = (seq, seq_len)
+                    && (self.track_rtt || self.track_retrans || self.track_out_of_order)
+                {
+                    entry.observe_tcp(
+                        ts,
+                        direction,
+                        seq,
+                        ack,
+                        seq_len,
+                        self.track_rtt,
+                        self.track_retrans,
+                        self.track_out_of_order,
+                    );
                 }
             }
             FlowStore::Scale {
@@ -1674,32 +1415,6 @@ impl FlowSnapshot {
     }
 }
 
-impl FlowKey {
-    pub fn new(protocol: FlowProtocol, src: Endpoint, dst: Endpoint) -> (Self, FlowDirection) {
-        let src_key = endpoint_key(&src);
-        let dst_key = endpoint_key(&dst);
-        if src_key <= dst_key {
-            (
-                FlowKey {
-                    protocol,
-                    a: src,
-                    b: dst,
-                },
-                FlowDirection::AtoB,
-            )
-        } else {
-            (
-                FlowKey {
-                    protocol,
-                    a: dst,
-                    b: src,
-                },
-                FlowDirection::BtoA,
-            )
-        }
-    }
-}
-
 /// Build a canonical flow key from a parsed packet.
 ///
 /// Returns `None` for packets that are not trackable flows (non-IP,
@@ -1745,86 +1460,6 @@ pub(crate) fn flow_compact_key_from_packet(packet: &ParsedPacket<'_>) -> Option<
     flow_key_from_packet(packet).and_then(|key| CompactFlowKey::from_flow_key(&key))
 }
 
-pub fn write_flow_json(
-    path: &Path,
-    flows: &[FlowSnapshot],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::create(path)?;
-    serde_json::to_writer_pretty(file, flows)?;
-    Ok(())
-}
-
-pub fn write_flow_csv(
-    path: &Path,
-    flows: &[FlowSnapshot],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    writeln!(
-        writer,
-        "protocol,endpoint_a_ip,endpoint_a_port,endpoint_b_ip,endpoint_b_port,first_seen,last_seen,duration_secs,packets_a_to_b,packets_b_to_a,bytes_a_to_b,bytes_b_to_a,packets_total,bytes_total,avg_bps,tcp_state,client,retransmissions,out_of_order,rtt_last_ms,rtt_min_ms,rtt_ewma_ms,rtt_samples"
-    )?;
-    for flow in flows {
-        let tcp_state = flow
-            .tcp_state
-            .map(|state| state.to_string())
-            .unwrap_or_default();
-        let client = flow.client.map(|dir| dir.to_string()).unwrap_or_default();
-        let rtt_last = flow
-            .rtt_last_ms
-            .map(|value| format!("{:.3}", value))
-            .unwrap_or_default();
-        let rtt_min = flow
-            .rtt_min_ms
-            .map(|value| format!("{:.3}", value))
-            .unwrap_or_default();
-        let rtt_ewma = flow
-            .rtt_ewma_ms
-            .map(|value| format!("{:.3}", value))
-            .unwrap_or_default();
-        let endpoint_a_ip = csv_escape(&flow.endpoint_a.ip.to_string());
-        let endpoint_b_ip = csv_escape(&flow.endpoint_b.ip.to_string());
-        writeln!(
-            writer,
-            "{},{},{},{},{},{:.6},{:.6},{:.6},{},{},{},{},{},{},{:.3},{},{},{},{},{},{},{},{}",
-            flow.protocol,
-            endpoint_a_ip,
-            flow.endpoint_a.port,
-            endpoint_b_ip,
-            flow.endpoint_b.port,
-            flow.first_seen,
-            flow.last_seen,
-            flow.duration_secs,
-            flow.packets_a_to_b,
-            flow.packets_b_to_a,
-            flow.bytes_a_to_b,
-            flow.bytes_b_to_a,
-            flow.packets_total,
-            flow.bytes_total,
-            flow.avg_bps,
-            tcp_state,
-            client,
-            flow.retransmissions,
-            flow.out_of_order,
-            rtt_last,
-            rtt_min,
-            rtt_ewma,
-            flow.rtt_samples
-        )?;
-    }
-    Ok(())
-}
-
-/// Escape a CSV field: wrap in double quotes if it contains comma, quote, or newline.
-fn csv_escape(field: &str) -> String {
-    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
-        let escaped = field.replace('"', "\"\"");
-        format!("\"{}\"", escaped)
-    } else {
-        field.to_string()
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 struct TcpFlags {
     syn: bool,
@@ -1841,22 +1476,6 @@ impl TcpFlags {
             fin: header.fin(),
             rst: header.rst(),
         }
-    }
-}
-
-fn endpoint_key(endpoint: &Endpoint) -> (u8, [u8; 16], u16) {
-    let (version, addr) = ip_key(endpoint.ip);
-    (version, addr, endpoint.port)
-}
-
-fn ip_key(ip: IpAddr) -> (u8, [u8; 16]) {
-    match ip {
-        IpAddr::V4(addr) => {
-            let mut bytes = [0u8; 16];
-            bytes[12..].copy_from_slice(&addr.octets());
-            (4, bytes)
-        }
-        IpAddr::V6(addr) => (6, addr.octets()),
     }
 }
 
