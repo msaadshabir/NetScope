@@ -53,6 +53,12 @@ pub struct KernelPcapStats {
     if_dropped_total: AtomicU64,
 }
 
+impl Default for KernelPcapStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KernelPcapStats {
     pub fn new() -> Self {
         KernelPcapStats {
@@ -81,6 +87,12 @@ impl KernelPcapStats {
 
     pub fn if_dropped_total(&self) -> u64 {
         self.if_dropped_total.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for PipelineStats {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -268,18 +280,17 @@ pub fn spawn(
     let aggregator_thread = thread::Builder::new()
         .name("ns-aggregator".into())
         .spawn(move || {
-            aggregator::run(
-                agg_rx,
-                agg_handle_clone,
+            let run_cfg = aggregator::AggregatorRunConfig {
                 web_event_tx,
                 max_top_n,
                 web_top_n,
-                stats_clone,
-                kernel_stats_clone,
+                stats: stats_clone,
+                kernel_stats: kernel_stats_clone,
                 tick_deadline_ms,
                 alerts_jsonl,
                 expired_flows_jsonl,
-            );
+            };
+            aggregator::run(agg_rx, agg_handle_clone, run_cfg);
         })
         .expect("failed to spawn aggregator thread");
 

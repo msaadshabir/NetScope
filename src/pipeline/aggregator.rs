@@ -122,18 +122,18 @@ impl AggregatorHandle {
 }
 
 /// Run the aggregator loop. This blocks until all worker senders disconnect.
-pub fn run(
-    rx: Receiver<WorkerEvent>,
-    handle: AggregatorHandle,
-    web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
-    max_top_n: usize,
-    web_top_n: usize,
-    stats: Arc<PipelineStats>,
-    kernel_stats: Arc<KernelPcapStats>,
-    tick_deadline_ms: u64,
-    alerts_jsonl: Option<PathBuf>,
-    expired_flows_jsonl: Option<PathBuf>,
-) {
+pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: AggregatorRunConfig) {
+    let AggregatorRunConfig {
+        web_event_tx,
+        max_top_n,
+        web_top_n,
+        stats,
+        kernel_stats,
+        tick_deadline_ms,
+        alerts_jsonl,
+        expired_flows_jsonl,
+    } = config;
+
     let num_workers = handle.inner.lock().unwrap().num_workers;
     let frame_seq = AtomicU64::new(0);
 
@@ -255,6 +255,18 @@ pub fn run(
     }
 
     tracing::debug!("aggregator shut down");
+}
+
+#[derive(Clone)]
+pub struct AggregatorRunConfig {
+    pub web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
+    pub max_top_n: usize,
+    pub web_top_n: usize,
+    pub stats: Arc<PipelineStats>,
+    pub kernel_stats: Arc<KernelPcapStats>,
+    pub tick_deadline_ms: u64,
+    pub alerts_jsonl: Option<PathBuf>,
+    pub expired_flows_jsonl: Option<PathBuf>,
 }
 
 /// Drain all remaining events from the channel, handling each one.
@@ -524,18 +536,17 @@ mod tests {
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(
-                rx,
-                thread_handle,
-                None,
-                0,
-                0,
+            let config = AggregatorRunConfig {
+                web_event_tx: None,
+                max_top_n: 0,
+                web_top_n: 0,
                 stats,
                 kernel_stats,
-                10,
-                None,
-                None,
-            );
+                tick_deadline_ms: 10,
+                alerts_jsonl: None,
+                expired_flows_jsonl: None,
+            };
+            run(rx, thread_handle, config);
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {
@@ -568,18 +579,17 @@ mod tests {
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
-            run(
-                rx,
-                thread_handle,
-                None,
-                0,
-                0,
+            let config = AggregatorRunConfig {
+                web_event_tx: None,
+                max_top_n: 0,
+                web_top_n: 0,
                 stats,
                 kernel_stats,
-                10,
-                None,
-                None,
-            );
+                tick_deadline_ms: 10,
+                alerts_jsonl: None,
+                expired_flows_jsonl: None,
+            };
+            run(rx, thread_handle, config);
         });
 
         tx.send(WorkerEvent::Shutdown(ShardShutdown {
