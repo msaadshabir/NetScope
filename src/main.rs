@@ -94,7 +94,7 @@ fn list_interfaces() {
     match capture::engine::list_interfaces() {
         Ok(devices) => {
             println!("Available network interfaces:");
-            println!("{:<20} {:<20} {}", "Name", "Description", "Addresses");
+            println!("{:<20} {:<20} Addresses", "Name", "Description");
             println!("{}", "-".repeat(70));
             for device in &devices {
                 let desc = device.desc.as_deref().unwrap_or("");
@@ -179,6 +179,45 @@ fn run_capture(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    validate_capture_config(config)?;
+    let mut cap = open_capture_source(config)?;
+    let mut savefile = match &config.output.write_pcap {
+        Some(path) => Some(cap.savefile(path)?),
+        None => None,
+    };
+    let capture_mode = cap.mode();
+
+    // Start web dashboard if enabled
+    let web_handle = start_web_dashboard(config);
+
+    print_capture_intro(config, capture_mode)?;
+
+    if config.pipeline.enabled {
+        run_capture_pipeline(
+            config,
+            running,
+            &mut cap,
+            savefile.as_mut(),
+            web_handle.as_ref(),
+        )?;
+    } else {
+        run_capture_inline(
+            config,
+            running,
+            &mut cap,
+            savefile.as_mut(),
+            web_handle.as_ref(),
+        )?;
+    }
+
+    print_kernel_capture_stats(&mut cap);
+
+    println!("{}", "=".repeat(50));
+
+    Ok(())
+}
+
+fn validate_capture_config(config: &RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
     if config.capture.interface.is_some() && config.capture.read_pcap.is_some() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -186,12 +225,17 @@ fn run_capture(
         )
         .into());
     }
+    Ok(())
+}
 
-    let mut cap = if let Some(path) = config.capture.read_pcap.as_deref() {
-        CaptureSource::Offline(capture::engine::open_offline(
+fn open_capture_source(
+    config: &RuntimeConfig,
+) -> Result<CaptureSource, Box<dyn std::error::Error>> {
+    if let Some(path) = config.capture.read_pcap.as_deref() {
+        Ok(CaptureSource::Offline(capture::engine::open_offline(
             path,
             config.capture.filter.as_deref(),
-        )?)
+        )?))
     } else {
         let capture_config = capture::engine::CaptureConfig {
             interface: config.capture.interface.clone(),
@@ -202,39 +246,42 @@ fn run_capture(
             immediate_mode: config.capture.immediate_mode,
             filter: config.capture.filter.clone(),
         };
-        CaptureSource::Live(capture::engine::open_capture(&capture_config)?)
-    };
-    let mut savefile = match &config.output.write_pcap {
-        Some(path) => Some(cap.savefile(path)?),
-        None => None,
-    };
-    let capture_mode = cap.mode();
+        Ok(CaptureSource::Live(capture::engine::open_capture(
+            &capture_config,
+        )?))
+    }
+}
 
-    // Start web dashboard if enabled
-    let web_handle = if config.web.enabled {
-        let server_config = web::server::WebServerConfig {
-            bind: config.web.bind.clone(),
-            port: config.web.port,
-            tick_ms: config.web.tick_ms,
-            packet_buffer: config.web.packet_buffer,
-        };
-        match web::server::start(server_config) {
-            Ok(handle) => {
-                println!(
-                    "Web dashboard: http://{}:{}",
-                    config.web.bind, config.web.port
-                );
-                Some(handle)
-            }
-            Err(err) => {
-                eprintln!("error starting web dashboard: {}", err);
-                None
-            }
+fn start_web_dashboard(config: &RuntimeConfig) -> Option<web::server::WebHandle> {
+    if !config.web.enabled {
+        return None;
+    }
+
+    let server_config = web::server::WebServerConfig {
+        bind: config.web.bind.clone(),
+        port: config.web.port,
+        tick_ms: config.web.tick_ms,
+        packet_buffer: config.web.packet_buffer,
+    };
+    match web::server::start(server_config) {
+        Ok(handle) => {
+            println!(
+                "Web dashboard: http://{}:{}",
+                config.web.bind, config.web.port
+            );
+            Some(handle)
         }
-    } else {
-        None
-    };
+        Err(err) => {
+            eprintln!("error starting web dashboard: {}", err);
+            None
+        }
+    }
+}
 
+fn print_capture_intro(
+    config: &RuntimeConfig,
+    capture_mode: CaptureMode,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("NetScope v{}", env!("CARGO_PKG_VERSION"));
     match capture_mode {
         CaptureMode::Live => {
@@ -263,26 +310,10 @@ fn run_capture(
             CaptureMode::Offline => println!("Processing packets until EOF..."),
         }
     }
+    Ok(())
+}
 
-    if config.pipeline.enabled {
-        run_capture_pipeline(
-            config,
-            running,
-            &mut cap,
-            savefile.as_mut(),
-            web_handle.as_ref(),
-        )?;
-    } else {
-        run_capture_inline(
-            config,
-            running,
-            &mut cap,
-            savefile.as_mut(),
-            web_handle.as_ref(),
-        )?;
-    }
-
-    // Print kernel-level pcap statistics (recv/drop/ifdrop) for live captures.
+fn print_kernel_capture_stats(cap: &mut CaptureSource) {
     match cap.stats() {
         Ok(Some(stats)) => {
             println!("  Kernel received:   {}", stats.received);
@@ -298,10 +329,6 @@ fn run_capture(
             tracing::debug!(error = %e, "failed to read pcap stats");
         }
     }
-
-    println!("{}", "=".repeat(50));
-
-    Ok(())
 }
 
 const SAVEFILE_FLUSH_INTERVAL_PACKETS: u64 = 1024;
@@ -314,7 +341,7 @@ fn write_packet_to_savefile(
 ) -> Result<(), pcap::Error> {
     if let Some(file) = savefile.as_mut() {
         file.write(packet);
-        if packet_count % SAVEFILE_FLUSH_INTERVAL_PACKETS == 0 {
+        if packet_count.is_multiple_of(SAVEFILE_FLUSH_INTERVAL_PACKETS) {
             file.flush()?;
         }
     }
@@ -536,8 +563,8 @@ fn run_capture_inline(
                         for alert in &alerts {
                             println!("[alert] {}", alert.description);
                             // Forward alerts to web dashboard
-                            if let Some(handle) = web_handle {
-                                if handle
+                            if let Some(handle) = web_handle
+                                && handle
                                     .event_tx
                                     .try_send(web::messages::CaptureEvent::Alert(
                                         web::messages::AlertMsg {
@@ -547,39 +574,38 @@ fn run_capture_inline(
                                         },
                                     ))
                                     .is_err()
-                                {
-                                    tracing::trace!("web event channel full, dropping alert");
-                                }
+                            {
+                                tracing::trace!("web event channel full, dropping alert");
                             }
                         }
                     }
                     flow_tracker.observe(timestamp, wire_len, &parsed);
 
                     // Send packet samples to web dashboard.
-                    if let Some(handle) = web_handle {
-                        if config.web.sample_rate > 0 && packet_count % config.web.sample_rate == 0
+                    if let Some(handle) = web_handle
+                        && config.web.sample_rate > 0
+                        && packet_count.is_multiple_of(config.web.sample_rate)
+                    {
+                        let (sample, stored) = build_packet_data(
+                            packet_count,
+                            timestamp,
+                            raw_data,
+                            &parsed,
+                            config.web.payload_bytes,
+                        );
+                        if handle
+                            .event_tx
+                            .try_send(web::messages::CaptureEvent::Packet(sample))
+                            .is_err()
                         {
-                            let (sample, stored) = build_packet_data(
-                                packet_count,
-                                timestamp,
-                                raw_data,
-                                &parsed,
-                                config.web.payload_bytes,
-                            );
-                            if handle
-                                .event_tx
-                                .try_send(web::messages::CaptureEvent::Packet(sample))
-                                .is_err()
-                            {
-                                tracing::trace!("web event channel full, dropping packet sample");
-                            }
-                            if handle
-                                .event_tx
-                                .try_send(web::messages::CaptureEvent::PacketStored(stored))
-                                .is_err()
-                            {
-                                tracing::trace!("web event channel full, dropping stored packet");
-                            }
+                            tracing::trace!("web event channel full, dropping packet sample");
+                        }
+                        if handle
+                            .event_tx
+                            .try_send(web::messages::CaptureEvent::PacketStored(stored))
+                            .is_err()
+                        {
+                            tracing::trace!("web event channel full, dropping stored packet");
                         }
                     }
 
@@ -627,12 +653,11 @@ fn run_capture_inline(
             }
         }
 
-        if let Some(last_poll) = live_stats_poll_last.as_mut() {
-            if let Some((dropped_total, if_dropped_total)) =
+        if let Some(last_poll) = live_stats_poll_last.as_mut()
+            && let Some((dropped_total, if_dropped_total)) =
                 maybe_poll_live_pcap_stats(cap, last_poll)
-            {
-                kernel_stats.update_totals(dropped_total, if_dropped_total);
-            }
+        {
+            kernel_stats.update_totals(dropped_total, if_dropped_total);
         }
 
         // Stats printing
@@ -900,12 +925,11 @@ fn run_capture_pipeline(
                 }
             }
 
-            if let Some(last_poll) = live_stats_poll_last.as_mut() {
-                if let Some((dropped_total, if_dropped_total)) =
+            if let Some(last_poll) = live_stats_poll_last.as_mut()
+                && let Some((dropped_total, if_dropped_total)) =
                     maybe_poll_live_pcap_stats(cap, last_poll)
-                {
-                    kernel_stats.update_totals(dropped_total, if_dropped_total);
-                }
+            {
+                kernel_stats.update_totals(dropped_total, if_dropped_total);
             }
 
             // CLI stats from aggregator
