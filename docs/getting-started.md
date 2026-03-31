@@ -4,7 +4,7 @@ Commands below assume `netscope` is on your PATH. If you built from source and d
 
 ## Prerequisites
 
-- **Rust 1.85+** (edition 2024). Install via [rustup](https://rustup.rs/).
+- **Rust** (pinned via `rust-toolchain.toml`, currently 1.93.1; edition 2024). Install via [rustup](https://rustup.rs/).
 - **libpcap** -- the packet capture library.
 
 ### Installing libpcap

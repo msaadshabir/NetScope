@@ -149,10 +149,16 @@ libpcap headers or developer tools are missing. See [Getting Started](getting-st
 
 ### Rust version too old
 
-NetScope requires Rust 1.85+ (edition 2024). Update with:
+NetScope pins Rust via `rust-toolchain.toml` (currently 1.93.1; edition 2024). Install the pinned toolchain with:
 
 ```bash
-rustup update stable
+rustup toolchain install 1.93.1
+```
+
+If you plan to run the repo quality checks, also install:
+
+```bash
+rustup component add rustfmt clippy --toolchain 1.93.1
 ```
 
 See [Getting Started](getting-started.md#prerequisites) for the current baseline toolchain requirements.

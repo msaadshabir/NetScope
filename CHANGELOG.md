@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 - DNS (UDP/53) decoding in CLI packet views and the web packet inspector.
 - TLS ClientHello SNI extraction in CLI packet views and the web packet inspector (best-effort, packet-level; no TCP reassembly; ECH can hide SNI).
+- Development: pinned Rust toolchain via `rust-toolchain.toml` and added CI checks for formatting, clippy, and tests.
 
 ### Fixed
 - Avoid duplicate DNS parsing when building web packet summaries + details.
@@ -34,6 +35,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - IPv6 parsing now walks common extension headers to expose the effective transport protocol and payload offset.
 - Packet detail store now uses fixed-size O(1) slot storage keyed by packet id modulo capacity, with stale-id rejection outside the active window.
 - Local perf validation is now captured via `scripts/perf/validate.sh` (release build + representative benchmark + CLI synthetic-flow memory validation).
+- Internal refactors to improve maintainability (flow module split, shared packet formatting helpers).
 
 ### Removed
 - Removed low-signal and perf/size guard tests (including the ignored 1M-flow RSS budget test and layout size assertions).

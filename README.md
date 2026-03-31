@@ -19,7 +19,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 ## Quickstart
 
 ```bash
-# Build
+# Build (Rust toolchain is pinned via rust-toolchain.toml; rustup will auto-install it)
 cargo build --release
 
 # List interfaces

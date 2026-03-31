@@ -23,7 +23,11 @@ netscope/
     cli.rs                      # Clap CLI argument definitions
     config.rs                   # TOML config structs, defaults, deserialization
     display.rs                  # CLI packet display (summary, detail, hex dump)
-    flow.rs                     # Flow tracking: keys, entries, TCP state, RTT, export
+    flow.rs                     # Flow tracking core: entries, tracker, snapshots
+    flow/
+      key.rs                    # Flow key/endpoint/protocol types and compact keys
+      export.rs                 # Flow JSON/CSV export helpers
+    packet_format.rs            # Shared packet summary/hex/timestamp formatting helpers
     memory.rs                   # RSS estimation and memory-scale helpers
     capture/
       mod.rs                    # Module declaration
@@ -62,9 +66,26 @@ cargo build              # Debug build
 cargo build --release    # Optimized build
 ```
 
+NetScope pins Rust via `rust-toolchain.toml` (currently Rust 1.93.1). With rustup, invoking `cargo` will auto-install the pinned toolchain on first use. To pre-install it (including `rustfmt` and `clippy`):
+
+```bash
+rustup toolchain install 1.93.1 --component rustfmt --component clippy
+rustup show
+```
+
 ## Running Tests
 
 ```bash
+cargo test
+```
+
+## Fast Local Quality Checks
+
+Run these before opening a PR:
+
+```bash
+cargo fmt -- --check
+cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
@@ -72,8 +93,8 @@ For local performance/memory sanity checks, use `scripts/perf/validate.sh` (rele
 
 Tests are co-located with the source code in `#[cfg(test)]` modules. Key test areas:
 
-- `src/flow.rs` -- flow key ordering, TCP state transitions, sequence tracking, RTT sampling.
-- `src/flow.rs` -- also contains the scale-mode flow store (`FlowKeyV4`, `FlowKeyV6`, `ScaleFlowEntry`).
+- `src/flow/key.rs` -- flow key ordering/canonicalization and compact key types (including scale-mode IPv4/IPv6 keys).
+- `src/flow.rs` -- TCP state transitions, sequence tracking, RTT sampling, and core tracker behavior.
 - `src/pipeline/router.rs` -- shard routing correctness (same flow both directions = same shard).
 - `src/protocol/*.rs` -- header parsing, field extraction, edge cases (truncated packets, wrong versions).
 
