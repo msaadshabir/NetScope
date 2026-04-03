@@ -99,23 +99,60 @@ pub fn build_packet_data(
 
     let mut layers = Vec::new();
 
-    // Ethernet
-    {
-        let eth = &parsed.ethernet;
-        layers.push(web::messages::LayerDetail {
-            name: "Ethernet".into(),
-            fields: vec![
-                (
-                    "Source".into(),
-                    protocol::ethernet::format_mac(eth.src_mac()),
-                ),
-                (
-                    "Destination".into(),
-                    protocol::ethernet::format_mac(eth.dst_mac()),
-                ),
-                ("EtherType".into(), format!("{}", eth.ether_type())),
-            ],
-        });
+    // Link layer
+    match &parsed.link {
+        protocol::LinkHeader::Ethernet(eth) => {
+            layers.push(web::messages::LayerDetail {
+                name: "Ethernet".into(),
+                fields: vec![
+                    (
+                        "Source".into(),
+                        protocol::ethernet::format_mac(eth.src_mac()),
+                    ),
+                    (
+                        "Destination".into(),
+                        protocol::ethernet::format_mac(eth.dst_mac()),
+                    ),
+                    ("EtherType".into(), format!("{}", eth.ether_type())),
+                ],
+            });
+        }
+        protocol::LinkHeader::LinuxSll(sll) => {
+            layers.push(web::messages::LayerDetail {
+                name: "Linux SLL".into(),
+                fields: vec![
+                    (
+                        "Packet Type".into(),
+                        format!("{} ({})", sll.packet_type_label(), sll.packet_type_raw()),
+                    ),
+                    ("ARPHRD".into(), format!("{}", sll.arphrd_type_raw())),
+                    ("Address Length".into(), format!("{}", sll.address_length())),
+                    ("Protocol".into(), format!("{}", sll.protocol())),
+                ],
+            });
+        }
+        protocol::LinkHeader::Loopback(loopback) => {
+            let encoding = match loopback.byte_order() {
+                protocol::loopback::LoopbackByteOrder::Native => "native-endian",
+                protocol::loopback::LoopbackByteOrder::BigEndian => "big-endian",
+            };
+            layers.push(web::messages::LayerDetail {
+                name: "Loopback".into(),
+                fields: vec![
+                    (
+                        "Family".into(),
+                        format!("{} ({})", loopback.family_label(), loopback.family_raw()),
+                    ),
+                    ("Encoding".into(), encoding.to_string()),
+                ],
+            });
+        }
+        protocol::LinkHeader::RawIp => {
+            layers.push(web::messages::LayerDetail {
+                name: "Raw IP".into(),
+                fields: vec![("Encapsulation".into(), "None (L3 starts at byte 0)".into())],
+            });
+        }
     }
 
     // VLAN

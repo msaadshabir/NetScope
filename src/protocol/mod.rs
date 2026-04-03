@@ -3,12 +3,62 @@ pub mod ethernet;
 pub mod icmp;
 pub mod ipv4;
 pub mod ipv6;
+pub mod loopback;
+pub mod sll;
 pub mod tcp;
 pub mod tls;
 pub mod udp;
 
 use std::fmt;
 use std::net::IpAddr;
+
+/// Supported datalink types for packet parsing/routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkType {
+    Ethernet,
+    LinuxSll,
+    LoopbackNull,
+    LoopbackLoop,
+    RawIp,
+    Unsupported(i32),
+}
+
+impl LinkType {
+    pub fn from_pcap_value(value: i32) -> Self {
+        match value {
+            1 => LinkType::Ethernet,
+            113 => LinkType::LinuxSll,
+            0 => LinkType::LoopbackNull,
+            108 => LinkType::LoopbackLoop,
+            12 | 101 => LinkType::RawIp,
+            other => LinkType::Unsupported(other),
+        }
+    }
+
+    pub fn as_pcap_value(self) -> i32 {
+        match self {
+            LinkType::Ethernet => 1,
+            LinkType::LinuxSll => 113,
+            LinkType::LoopbackNull => 0,
+            LinkType::LoopbackLoop => 108,
+            LinkType::RawIp => 12,
+            LinkType::Unsupported(value) => value,
+        }
+    }
+}
+
+impl fmt::Display for LinkType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LinkType::Ethernet => write!(f, "Ethernet"),
+            LinkType::LinuxSll => write!(f, "Linux SLL"),
+            LinkType::LoopbackNull => write!(f, "Loopback (NULL)"),
+            LinkType::LoopbackLoop => write!(f, "Loopback (LOOP)"),
+            LinkType::RawIp => write!(f, "Raw IP"),
+            LinkType::Unsupported(value) => write!(f, "Unsupported({})", value),
+        }
+    }
+}
 
 /// EtherType constants
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,11 +182,31 @@ impl std::error::Error for ParseError {}
 /// A fully parsed packet, referencing the original byte slice
 #[derive(Debug)]
 pub struct ParsedPacket<'a> {
-    pub ethernet: ethernet::EthernetHeader<'a>,
+    pub link: LinkHeader<'a>,
     pub vlan: Option<VlanTag>,
     pub network: Option<NetworkHeader<'a>>,
     pub transport: Option<TransportHeader<'a>>,
     pub payload: &'a [u8],
+}
+
+/// Parsed link-layer header.
+#[derive(Debug)]
+pub enum LinkHeader<'a> {
+    Ethernet(ethernet::EthernetHeader<'a>),
+    LinuxSll(sll::LinuxSllHeader<'a>),
+    Loopback(loopback::LoopbackHeader<'a>),
+    RawIp,
+}
+
+impl fmt::Display for LinkHeader<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            LinkHeader::Ethernet(h) => write!(f, "{}", h),
+            LinkHeader::LinuxSll(h) => write!(f, "{}", h),
+            LinkHeader::Loopback(h) => write!(f, "{}", h),
+            LinkHeader::RawIp => write!(f, "Raw IP"),
+        }
+    }
 }
 
 /// VLAN tag (802.1Q)
@@ -189,14 +259,51 @@ pub enum TransportHeader<'a> {
 /// This is the main entry point for the protocol stack.
 #[inline]
 pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
-    // Layer 2: Ethernet
-    let eth = ethernet::EthernetHeader::parse(data)?;
-    let mut remaining = eth.payload();
-    let mut ether_type = eth.ether_type();
+    parse_packet_with_linktype(data, LinkType::Ethernet)
+}
+
+/// Parse a complete packet from raw bytes using a specific link type.
+#[inline]
+pub fn parse_packet_with_linktype(
+    data: &[u8],
+    link_type: LinkType,
+) -> Result<ParsedPacket<'_>, ParseError> {
+    let (link, mut remaining, mut ether_type) = match link_type {
+        LinkType::Ethernet => {
+            let eth = ethernet::EthernetHeader::parse(data)?;
+            let payload = eth.payload();
+            let ether_type = eth.ether_type();
+            (LinkHeader::Ethernet(eth), payload, Some(ether_type))
+        }
+        LinkType::LinuxSll => {
+            let sll = sll::LinuxSllHeader::parse(data)?;
+            let payload = sll.payload();
+            let ether_type = sll.protocol();
+            (LinkHeader::LinuxSll(sll), payload, Some(ether_type))
+        }
+        LinkType::LoopbackNull => {
+            let loopback = loopback::LoopbackHeader::parse_null(data)?;
+            let payload = loopback.payload();
+            (LinkHeader::Loopback(loopback), payload, None)
+        }
+        LinkType::LoopbackLoop => {
+            let loopback = loopback::LoopbackHeader::parse_loop(data)?;
+            let payload = loopback.payload();
+            (LinkHeader::Loopback(loopback), payload, None)
+        }
+        LinkType::RawIp => (LinkHeader::RawIp, data, None),
+        LinkType::Unsupported(value) => {
+            return Err(ParseError::InvalidHeader(format!(
+                "unsupported link type {}",
+                value
+            )));
+        }
+    };
+
     let mut vlan = None;
 
-    // Handle VLAN tagging (802.1Q)
-    if ether_type == EtherType::VlanTagged {
+    // Handle VLAN tagging (802.1Q) for link types that surface EtherType.
+    if let Some(EtherType::VlanTagged) = ether_type {
         if remaining.len() < 4 {
             return Err(ParseError::TooShort {
                 expected: 4,
@@ -209,12 +316,37 @@ pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
             dei: (tci >> 12) & 1 == 1,
             vlan_id: tci & 0x0FFF,
         });
-        ether_type = EtherType::from(u16::from_be_bytes([remaining[2], remaining[3]]));
+        ether_type = Some(EtherType::from(u16::from_be_bytes([
+            remaining[2],
+            remaining[3],
+        ])));
         remaining = &remaining[4..];
     }
 
-    // Layer 3: Network
-    let (network, l4_data, ip_proto) = match ether_type {
+    let (network, l4_data, ip_proto) = if let Some(link_ether_type) = ether_type {
+        parse_network_from_ether_type(link_ether_type, remaining)?
+    } else {
+        parse_network_from_ip_payload(remaining)?
+    };
+
+    // Layer 4: Transport
+    let (transport, payload) = parse_transport(ip_proto, l4_data);
+
+    Ok(ParsedPacket {
+        link,
+        vlan,
+        network,
+        transport,
+        payload,
+    })
+}
+
+#[inline]
+fn parse_network_from_ether_type<'a>(
+    ether_type: EtherType,
+    remaining: &'a [u8],
+) -> Result<(Option<NetworkHeader<'a>>, &'a [u8], Option<IpProtocol>), ParseError> {
+    let parsed = match ether_type {
         EtherType::Ipv4 => {
             let hdr = ipv4::Ipv4Header::parse(remaining)?;
             let proto = hdr.protocol();
@@ -230,8 +362,45 @@ pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
         _ => (None, remaining, None),
     };
 
-    // Layer 4: Transport
-    let (transport, payload) = match ip_proto {
+    Ok(parsed)
+}
+
+#[inline]
+fn parse_network_from_ip_payload<'a>(
+    remaining: &'a [u8],
+) -> Result<(Option<NetworkHeader<'a>>, &'a [u8], Option<IpProtocol>), ParseError> {
+    if remaining.is_empty() {
+        return Err(ParseError::TooShort {
+            expected: 1,
+            actual: 0,
+        });
+    }
+
+    let parsed = match remaining[0] >> 4 {
+        4 => {
+            let hdr = ipv4::Ipv4Header::parse(remaining)?;
+            let proto = hdr.protocol();
+            let payload = hdr.payload();
+            (Some(NetworkHeader::Ipv4(hdr)), payload, Some(proto))
+        }
+        6 => {
+            let hdr = ipv6::Ipv6Header::parse(remaining)?;
+            let proto = hdr.next_header();
+            let payload = hdr.payload();
+            (Some(NetworkHeader::Ipv6(hdr)), payload, Some(proto))
+        }
+        _ => (None, remaining, None),
+    };
+
+    Ok(parsed)
+}
+
+#[inline]
+fn parse_transport<'a>(
+    ip_proto: Option<IpProtocol>,
+    l4_data: &'a [u8],
+) -> (Option<TransportHeader<'a>>, &'a [u8]) {
+    match ip_proto {
         Some(IpProtocol::Tcp) => match tcp::TcpHeader::parse(l4_data) {
             Ok(hdr) => {
                 let payload = hdr.payload();
@@ -256,13 +425,80 @@ pub fn parse_packet(data: &[u8]) -> Result<ParsedPacket<'_>, ParseError> {
             }
         }
         _ => (None, l4_data),
-    };
+    }
+}
 
-    Ok(ParsedPacket {
-        ethernet: eth,
-        vlan,
-        network,
-        transport,
-        payload,
-    })
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tcp_ipv4_payload(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let mut pkt = vec![0u8; 20 + 20];
+        pkt[0] = 0x45; // version + IHL
+        pkt[2] = 0x00;
+        pkt[3] = 0x28; // total length = 40 bytes
+        pkt[9] = 6; // TCP
+        pkt[12..16].copy_from_slice(&src_ip);
+        pkt[16..20].copy_from_slice(&dst_ip);
+        pkt[20..22].copy_from_slice(&src_port.to_be_bytes());
+        pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
+        pkt[32] = 0x50; // TCP data offset = 5 (20-byte header)
+        pkt
+    }
+
+    #[test]
+    fn parse_raw_ip_ipv4_tcp() {
+        let raw = make_tcp_ipv4_payload([192, 0, 2, 10], [192, 0, 2, 20], 12000, 443);
+        let parsed = parse_packet_with_linktype(&raw, LinkType::RawIp).unwrap();
+
+        assert!(matches!(parsed.link, LinkHeader::RawIp));
+        assert!(matches!(parsed.network, Some(NetworkHeader::Ipv4(_))));
+        assert!(matches!(parsed.transport, Some(TransportHeader::Tcp(_))));
+    }
+
+    #[test]
+    fn parse_loopback_null_ipv4_tcp() {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&2u32.to_ne_bytes()); // AF_INET
+        pkt.extend_from_slice(&make_tcp_ipv4_payload(
+            [127, 0, 0, 1],
+            [127, 0, 0, 1],
+            50000,
+            8080,
+        ));
+
+        let parsed = parse_packet_with_linktype(&pkt, LinkType::LoopbackNull).unwrap();
+
+        assert!(matches!(parsed.link, LinkHeader::Loopback(_)));
+        assert!(matches!(parsed.network, Some(NetworkHeader::Ipv4(_))));
+        assert!(matches!(parsed.transport, Some(TransportHeader::Tcp(_))));
+    }
+
+    #[test]
+    fn parse_linux_sll_ipv4_tcp() {
+        let mut pkt = vec![
+            0x00, 0x00, // packet type = host
+            0x00, 0x01, // ARPHRD = ethernet
+            0x00, 0x06, // addr len = 6
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x00, 0x00, // addr
+            0x08, 0x00, // protocol = IPv4
+        ];
+        pkt.extend_from_slice(&make_tcp_ipv4_payload(
+            [10, 10, 0, 1],
+            [10, 10, 0, 2],
+            23456,
+            80,
+        ));
+
+        let parsed = parse_packet_with_linktype(&pkt, LinkType::LinuxSll).unwrap();
+
+        assert!(matches!(parsed.link, LinkHeader::LinuxSll(_)));
+        assert!(matches!(parsed.network, Some(NetworkHeader::Ipv4(_))));
+        assert!(matches!(parsed.transport, Some(TransportHeader::Tcp(_))));
+    }
 }

@@ -4,7 +4,7 @@
 //! and optional detailed views with hex dumps.
 
 use crate::packet_format;
-use crate::protocol::{self, NetworkHeader, ParsedPacket, TransportHeader, ethernet};
+use crate::protocol::{self, LinkHeader, NetworkHeader, ParsedPacket, TransportHeader, ethernet};
 
 fn build_packet_summary_line(
     index: u64,
@@ -16,7 +16,7 @@ fn build_packet_summary_line(
     let ts = packet_format::format_timestamp(timestamp);
 
     // Build the summary line
-    let mut summary = format!("#{:<6} {} Eth: {}", index, ts, packet.ethernet);
+    let mut summary = format!("#{:<6} {} Link: {}", index, ts, packet.link);
 
     // VLAN info
     if let Some(vlan) = &packet.vlan {
@@ -93,21 +93,51 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
     println!("{}", summary);
     println!("{}", "-".repeat(80));
 
-    // Ethernet details
-    println!("  Ethernet:");
-    println!(
-        "    Source:      {}",
-        ethernet::format_mac(packet.ethernet.src_mac())
-    );
-    println!(
-        "    Destination: {}",
-        ethernet::format_mac(packet.ethernet.dst_mac())
-    );
-    println!(
-        "    EtherType:   {} (0x{:04x})",
-        packet.ethernet.ether_type(),
-        packet.ethernet.ether_type_raw()
-    );
+    // Link-layer details
+    println!("  Link:");
+    match &packet.link {
+        LinkHeader::Ethernet(hdr) => {
+            println!("    Type:        Ethernet");
+            println!("    Source:      {}", ethernet::format_mac(hdr.src_mac()));
+            println!("    Destination: {}", ethernet::format_mac(hdr.dst_mac()));
+            println!(
+                "    EtherType:   {} (0x{:04x})",
+                hdr.ether_type(),
+                hdr.ether_type_raw()
+            );
+        }
+        LinkHeader::LinuxSll(hdr) => {
+            println!("    Type:        Linux SLL");
+            println!(
+                "    Packet Type: {} ({})",
+                hdr.packet_type_label(),
+                hdr.packet_type_raw()
+            );
+            println!("    ARPHRD:      {}", hdr.arphrd_type_raw());
+            println!("    Address:     {}", format_link_address(hdr.address()));
+            println!(
+                "    Protocol:    {} (0x{:04x})",
+                hdr.protocol(),
+                hdr.protocol_raw()
+            );
+        }
+        LinkHeader::Loopback(hdr) => {
+            println!("    Type:        Loopback");
+            println!(
+                "    Family:      {} ({})",
+                hdr.family_label(),
+                hdr.family_raw()
+            );
+            let encoding = match hdr.byte_order() {
+                protocol::loopback::LoopbackByteOrder::Native => "native-endian",
+                protocol::loopback::LoopbackByteOrder::BigEndian => "big-endian",
+            };
+            println!("    Encoding:    {}", encoding);
+        }
+        LinkHeader::RawIp => {
+            println!("    Type:        Raw IP");
+        }
+    }
 
     if let Some(vlan) = &packet.vlan {
         println!("  VLAN:");
@@ -272,6 +302,22 @@ fn print_hex_dump(data: &[u8]) {
     if display_len < data.len() {
         println!("    ... ({} bytes remaining)", data.len() - display_len);
     }
+}
+
+fn format_link_address(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return "-".to_string();
+    }
+
+    if bytes.len() == 6 {
+        return ethernet::format_mac(bytes);
+    }
+
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 /// Print a compact one-line summary for a packet that failed to parse.

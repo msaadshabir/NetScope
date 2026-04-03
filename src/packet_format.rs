@@ -1,4 +1,4 @@
-use crate::protocol::{self, ParsedPacket, TransportHeader};
+use crate::protocol::{self, LinkHeader, ParsedPacket, TransportHeader};
 
 pub fn parse_dns_and_tls<'a>(
     parsed: &'a ParsedPacket<'a>,
@@ -43,7 +43,12 @@ pub fn summarise_packet(
             }
         }
     } else {
-        proto = format!("{}", parsed.ethernet.ether_type());
+        proto = match &parsed.link {
+            LinkHeader::Ethernet(hdr) => format!("{}", hdr.ether_type()),
+            LinkHeader::LinuxSll(hdr) => format!("{}", hdr.protocol()),
+            LinkHeader::Loopback(hdr) => format!("Loopback {}", hdr.family_label()),
+            LinkHeader::RawIp => "IP".to_string(),
+        };
     }
 
     if let Some(transport) = &parsed.transport {
