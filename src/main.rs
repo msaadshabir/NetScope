@@ -141,6 +141,13 @@ impl CaptureSource {
         }
     }
 
+    fn get_datalink(&self) -> pcap::Linktype {
+        match self {
+            CaptureSource::Live(cap) => cap.get_datalink(),
+            CaptureSource::Offline(cap) => cap.get_datalink(),
+        }
+    }
+
     fn savefile<P: AsRef<std::path::Path>>(
         &mut self,
         path: P,
@@ -181,6 +188,7 @@ fn run_capture(
 ) -> Result<(), Box<dyn std::error::Error>> {
     validate_capture_config(config)?;
     let mut cap = open_capture_source(config)?;
+    let link_type = protocol::LinkType::from_pcap_value(cap.get_datalink().0);
     let mut savefile = match &config.output.write_pcap {
         Some(path) => Some(cap.savefile(path)?),
         None => None,
@@ -191,11 +199,13 @@ fn run_capture(
     let web_handle = start_web_dashboard(config);
 
     print_capture_intro(config, capture_mode)?;
+    println!("Datalink: {}", link_type);
 
     if config.pipeline.enabled {
         run_capture_pipeline(
             config,
             running,
+            link_type,
             &mut cap,
             savefile.as_mut(),
             web_handle.as_ref(),
@@ -204,6 +214,7 @@ fn run_capture(
         run_capture_inline(
             config,
             running,
+            link_type,
             &mut cap,
             savefile.as_mut(),
             web_handle.as_ref(),
@@ -472,6 +483,7 @@ fn flush_expired_flows_jsonl(
 fn run_capture_inline(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
+    link_type: protocol::LinkType,
     cap: &mut CaptureSource,
     mut savefile: Option<&mut pcap::Savefile>,
     web_handle: Option<&web::server::WebHandle>,
@@ -555,7 +567,7 @@ fn run_capture_inline(
             }
 
             // Parse the packet
-            match protocol::parse_packet(raw_data) {
+            match protocol::parse_packet_with_linktype(raw_data, link_type) {
                 Ok(parsed) => {
                     if config.analysis.anomalies.enabled {
                         let alerts =
@@ -828,6 +840,7 @@ fn run_capture_inline(
 fn run_capture_pipeline(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
+    link_type: protocol::LinkType,
     cap: &mut CaptureSource,
     mut savefile: Option<&mut pcap::Savefile>,
     web_handle: Option<&web::server::WebHandle>,
@@ -853,6 +866,7 @@ fn run_capture_pipeline(
         alerts_jsonl: config.analysis.alerts_jsonl.clone(),
         expired_flows_jsonl: config.output.expired_flows_jsonl.clone(),
         kernel_stats: kernel_stats.clone(),
+        link_type,
     };
 
     let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle);
@@ -904,7 +918,11 @@ fn run_capture_pipeline(
                 }
 
                 // Determine shard and dispatch
-                let shard = pipeline::router::shard_for_packet(raw_data, num_workers);
+                let shard = pipeline::router::shard_for_packet_with_linktype(
+                    raw_data,
+                    num_workers,
+                    link_type,
+                );
                 let mut buf = pipe.buffer_pool.acquire();
                 buf.extend_from_slice(raw_data);
                 let owned = pipeline::OwnedPacket {

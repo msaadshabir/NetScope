@@ -50,6 +50,7 @@ pub struct ShardShutdown {
 
 pub struct Worker {
     shard_id: usize,
+    link_type: protocol::LinkType,
     flow_tracker: FlowTracker,
     anomaly_detector: AnomalyDetector,
     analysis_cfg: AnalysisConfig,
@@ -69,6 +70,7 @@ pub struct Worker {
 impl Worker {
     pub fn new(
         shard_id: usize,
+        link_type: protocol::LinkType,
         flow_cfg: FlowConfig,
         analysis_cfg: AnalysisConfig,
         web_cfg: WebConfig,
@@ -92,6 +94,7 @@ impl Worker {
 
         Worker {
             shard_id,
+            link_type,
             flow_tracker,
             anomaly_detector,
             analysis_cfg,
@@ -167,7 +170,7 @@ impl Worker {
         self.tick_bytes += pkt.wire_len;
         self.tick_packets += 1;
 
-        match protocol::parse_packet(&pkt.data) {
+        match protocol::parse_packet_with_linktype(&pkt.data, self.link_type) {
             Ok(parsed) => {
                 // Anomaly detection
                 if self.analysis_cfg.anomalies.enabled {

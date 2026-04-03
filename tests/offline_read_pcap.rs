@@ -12,7 +12,7 @@ fn temp_path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("netscope-{}-{}.pcap", name, unique))
 }
 
-fn write_test_pcap(path: &Path) {
+fn write_test_pcap(path: &Path, linktype: u32, packet: &[u8]) {
     let mut file = File::create(path).expect("failed to create temp pcap");
 
     // pcap global header (little-endian, microsecond resolution)
@@ -23,28 +23,9 @@ fn write_test_pcap(path: &Path) {
     header.extend_from_slice(&0i32.to_le_bytes()); // thiszone
     header.extend_from_slice(&0u32.to_le_bytes()); // sigfigs
     header.extend_from_slice(&65535u32.to_le_bytes()); // snaplen
-    header.extend_from_slice(&1u32.to_le_bytes()); // linktype Ethernet
+    header.extend_from_slice(&linktype.to_le_bytes());
     file.write_all(&header)
         .expect("failed to write pcap header");
-
-    // One Ethernet+IPv4 packet (14 + 20 bytes)
-    let packet: [u8; 34] = [
-        // Ethernet header
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
-        0x08, 0x00, // ethertype IPv4
-        // IPv4 header (minimal, protocol TCP)
-        0x45, // version + ihl
-        0x00, // dscp/ecn
-        0x00, 0x14, // total length = 20
-        0x00, 0x01, // identification
-        0x00, 0x00, // flags + fragment offset
-        64,   // ttl
-        6,    // protocol TCP
-        0x00, 0x00, // checksum (not validated by parser)
-        192, 168, 1, 10, // src ip
-        192, 168, 1, 20, // dst ip
-    ];
 
     // pcap packet record header
     file.write_all(&1u32.to_le_bytes()) // ts_sec
@@ -59,6 +40,54 @@ fn write_test_pcap(path: &Path) {
     file.flush().expect("failed to flush pcap file");
 }
 
+fn make_ipv4_header() -> [u8; 20] {
+    [
+        0x45, // version + ihl
+        0x00, // dscp/ecn
+        0x00, 0x14, // total length = 20
+        0x00, 0x01, // identification
+        0x00, 0x00, // flags + fragment offset
+        64,   // ttl
+        6,    // protocol TCP
+        0x00, 0x00, // checksum (not validated by parser)
+        192, 168, 1, 10, // src ip
+        192, 168, 1, 20, // dst ip
+    ]
+}
+
+fn make_ethernet_packet() -> Vec<u8> {
+    let mut packet = vec![
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+        0x08, 0x00, // ethertype IPv4
+    ];
+    packet.extend_from_slice(&make_ipv4_header());
+    packet
+}
+
+fn make_linux_sll_packet() -> Vec<u8> {
+    let mut packet = vec![
+        0x00, 0x00, // packet type = host
+        0x00, 0x01, // ARPHRD = ethernet
+        0x00, 0x06, // address length
+        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x00, 0x00, // address (8 bytes)
+        0x08, 0x00, // protocol = IPv4
+    ];
+    packet.extend_from_slice(&make_ipv4_header());
+    packet
+}
+
+fn make_loopback_null_packet() -> Vec<u8> {
+    let mut packet = Vec::new();
+    packet.extend_from_slice(&2u32.to_ne_bytes()); // AF_INET in native endian
+    packet.extend_from_slice(&make_ipv4_header());
+    packet
+}
+
+fn make_raw_ip_packet() -> Vec<u8> {
+    make_ipv4_header().to_vec()
+}
+
 fn run_netscope(args: &[&str]) -> std::process::Output {
     let bin = env!("CARGO_BIN_EXE_netscope");
     Command::new(bin)
@@ -67,9 +96,15 @@ fn run_netscope(args: &[&str]) -> std::process::Output {
         .expect("failed to run netscope binary")
 }
 
-fn run_read_pcap_test(name: &str, extra_args: &[&str]) {
+fn run_read_pcap_test(
+    name: &str,
+    linktype: u32,
+    packet: &[u8],
+    extra_args: &[&str],
+    expect_parse_errors_zero: bool,
+) {
     let pcap_path = temp_path(name);
-    write_test_pcap(&pcap_path);
+    write_test_pcap(&pcap_path, linktype, packet);
 
     let pcap_path_str = pcap_path
         .to_str()
@@ -97,14 +132,60 @@ fn run_read_pcap_test(name: &str, extra_args: &[&str]) {
         "stdout was: {}",
         stdout
     );
+
+    if expect_parse_errors_zero {
+        assert!(
+            stdout.contains("Parse errors:      0"),
+            "stdout was: {}",
+            stdout
+        );
+    }
 }
 
 #[test]
 fn read_pcap_inline_mode() {
-    run_read_pcap_test("inline", &[]);
+    let packet = make_ethernet_packet();
+    run_read_pcap_test("inline", 1, &packet, &[], true);
 }
 
 #[test]
 fn read_pcap_pipeline_mode() {
-    run_read_pcap_test("pipeline", &["--pipeline"]);
+    let packet = make_ethernet_packet();
+    run_read_pcap_test("pipeline", 1, &packet, &["--pipeline"], false);
+}
+
+#[test]
+fn read_pcap_inline_linux_sll_mode() {
+    let packet = make_linux_sll_packet();
+    run_read_pcap_test("inline-sll", 113, &packet, &[], true);
+}
+
+#[test]
+fn read_pcap_inline_loopback_null_mode() {
+    let packet = make_loopback_null_packet();
+    run_read_pcap_test("inline-null", 0, &packet, &[], true);
+}
+
+#[test]
+fn read_pcap_inline_raw_ip_mode() {
+    let packet = make_raw_ip_packet();
+    run_read_pcap_test("inline-raw", 101, &packet, &[], true);
+}
+
+#[test]
+fn read_pcap_pipeline_linux_sll_mode() {
+    let packet = make_linux_sll_packet();
+    run_read_pcap_test("pipeline-sll", 113, &packet, &["--pipeline"], false);
+}
+
+#[test]
+fn read_pcap_pipeline_loopback_null_mode() {
+    let packet = make_loopback_null_packet();
+    run_read_pcap_test("pipeline-null", 0, &packet, &["--pipeline"], false);
+}
+
+#[test]
+fn read_pcap_pipeline_raw_ip_mode() {
+    let packet = make_raw_ip_packet();
+    run_read_pcap_test("pipeline-raw", 101, &packet, &["--pipeline"], false);
 }

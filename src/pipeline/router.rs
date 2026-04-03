@@ -6,7 +6,7 @@
 
 use std::hash::{Hash, Hasher};
 
-use crate::protocol::ipv6::locate_ipv6_payload;
+use crate::protocol::{LinkType, ipv6::locate_ipv6_payload};
 
 /// Compute the shard index for a raw Ethernet frame.
 ///
@@ -14,10 +14,26 @@ use crate::protocol::ipv6::locate_ipv6_payload;
 /// byte-based hash if the packet cannot be quickly classified.
 #[inline]
 pub fn shard_for_packet(data: &[u8], num_shards: usize) -> usize {
+    shard_for_packet_with_linktype(data, num_shards, LinkType::Ethernet)
+}
+
+/// Compute the shard index for packet bytes using an explicit link type.
+#[inline]
+pub fn shard_for_packet_with_linktype(
+    data: &[u8],
+    num_shards: usize,
+    link_type: LinkType,
+) -> usize {
     if num_shards == 0 {
         return 0;
     }
-    let hash = fast_flow_hash(data);
+
+    // Unsupported datalinks are forced to shard 0 to preserve flow coherence.
+    if matches!(link_type, LinkType::Unsupported(_)) {
+        return 0;
+    }
+
+    let hash = fast_flow_hash_with_linktype(data, link_type);
     (hash as usize) % num_shards
 }
 
@@ -27,7 +43,18 @@ pub fn shard_for_packet(data: &[u8], num_shards: usize) -> usize {
 /// and produces a hash. Malformed packets get a non-ideal but still valid
 /// hash (worst case: uneven shard distribution, not correctness issues).
 #[inline]
-fn fast_flow_hash(data: &[u8]) -> u64 {
+fn fast_flow_hash_with_linktype(data: &[u8], link_type: LinkType) -> u64 {
+    match link_type {
+        LinkType::Ethernet => fast_flow_hash_ethernet(data),
+        LinkType::LinuxSll => fast_flow_hash_linux_sll(data),
+        LinkType::LoopbackNull | LinkType::LoopbackLoop => fast_flow_hash_ip_at_offset(data, 4),
+        LinkType::RawIp => fast_flow_hash_ip_at_offset(data, 0),
+        LinkType::Unsupported(_) => byte_hash(data),
+    }
+}
+
+#[inline]
+fn fast_flow_hash_ethernet(data: &[u8]) -> u64 {
     // Ethernet header: 14 bytes (6 dst + 6 src + 2 ethertype)
     if data.len() < 14 {
         return byte_hash(data);
@@ -48,6 +75,45 @@ fn fast_flow_hash(data: &[u8]) -> u64 {
     match ether_type {
         0x0800 => hash_ipv4(data, ip_offset),
         0x86DD => hash_ipv6(data, ip_offset),
+        _ => byte_hash(data),
+    }
+}
+
+#[inline]
+fn fast_flow_hash_linux_sll(data: &[u8]) -> u64 {
+    // Linux cooked capture v1 fixed header: 16 bytes.
+    if data.len() < 16 {
+        return byte_hash(data);
+    }
+
+    let mut ether_type = u16::from_be_bytes([data[14], data[15]]);
+    let mut ip_offset: usize = 16;
+
+    // Optional 802.1Q VLAN tag in the payload.
+    if ether_type == 0x8100 {
+        if data.len() < 20 {
+            return byte_hash(data);
+        }
+        ether_type = u16::from_be_bytes([data[18], data[19]]);
+        ip_offset = 20;
+    }
+
+    match ether_type {
+        0x0800 => hash_ipv4(data, ip_offset),
+        0x86DD => hash_ipv6(data, ip_offset),
+        _ => byte_hash(data),
+    }
+}
+
+#[inline]
+fn fast_flow_hash_ip_at_offset(data: &[u8], ip_offset: usize) -> u64 {
+    if data.len() <= ip_offset {
+        return byte_hash(data);
+    }
+
+    match data[ip_offset] >> 4 {
+        4 => hash_ipv4(data, ip_offset),
+        6 => hash_ipv6(data, ip_offset),
         _ => byte_hash(data),
     }
 }
@@ -149,6 +215,27 @@ fn byte_hash(data: &[u8]) -> u64 {
 mod tests {
     use super::*;
 
+    fn make_tcp_ipv4_payload(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let mut pkt = vec![0u8; 20 + 20];
+
+        // IPv4: version=4, ihl=5, protocol=6 (TCP)
+        pkt[0] = 0x45;
+        pkt[9] = 6;
+        pkt[12..16].copy_from_slice(&src_ip);
+        pkt[16..20].copy_from_slice(&dst_ip);
+
+        // TCP: src_port, dst_port
+        pkt[20..22].copy_from_slice(&src_port.to_be_bytes());
+        pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
+
+        pkt
+    }
+
     /// A minimal valid TCP/IPv4 Ethernet frame (SYN, no payload).
     fn make_tcp_ipv4_frame(
         src_ip: [u8; 4],
@@ -156,24 +243,52 @@ mod tests {
         src_port: u16,
         dst_port: u16,
     ) -> Vec<u8> {
-        let mut frame = vec![0u8; 14 + 20 + 20]; // eth + ipv4 + tcp
+        let mut frame = vec![0u8; 14];
 
         // Ethernet: dst mac, src mac, ethertype 0x0800
         frame[12] = 0x08;
         frame[13] = 0x00;
-
-        // IPv4: version=4, ihl=5, protocol=6 (TCP)
-        frame[14] = 0x45; // version + IHL
-        frame[14 + 9] = 6; // protocol = TCP
-        frame[14 + 12..14 + 16].copy_from_slice(&src_ip);
-        frame[14 + 16..14 + 20].copy_from_slice(&dst_ip);
-
-        // TCP: src_port, dst_port
-        let tcp_offset = 34;
-        frame[tcp_offset..tcp_offset + 2].copy_from_slice(&src_port.to_be_bytes());
-        frame[tcp_offset + 2..tcp_offset + 4].copy_from_slice(&dst_port.to_be_bytes());
+        frame.extend_from_slice(&make_tcp_ipv4_payload(src_ip, dst_ip, src_port, dst_port));
 
         frame
+    }
+
+    fn make_tcp_ipv4_sll_packet(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let mut pkt = vec![
+            0x00, 0x00, // packet type = host
+            0x00, 0x01, // ARPHRD = ethernet
+            0x00, 0x06, // address length
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x00, 0x00, // addr[8]
+            0x08, 0x00, // protocol = IPv4
+        ];
+        pkt.extend_from_slice(&make_tcp_ipv4_payload(src_ip, dst_ip, src_port, dst_port));
+        pkt
+    }
+
+    fn make_tcp_ipv4_loopback_null_packet(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.extend_from_slice(&2u32.to_ne_bytes()); // AF_INET
+        pkt.extend_from_slice(&make_tcp_ipv4_payload(src_ip, dst_ip, src_port, dst_port));
+        pkt
+    }
+
+    fn make_tcp_ipv4_raw_packet(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+    ) -> Vec<u8> {
+        make_tcp_ipv4_payload(src_ip, dst_ip, src_port, dst_port)
     }
 
     #[test]
@@ -193,6 +308,38 @@ mod tests {
     fn short_packet_no_panic() {
         let shard = shard_for_packet(&[0x08, 0x00], 4);
         assert!(shard < 4);
+    }
+
+    #[test]
+    fn linux_sll_same_flow_same_shard() {
+        let pkt_ab = make_tcp_ipv4_sll_packet([10, 1, 0, 1], [10, 1, 0, 2], 53000, 443);
+        let pkt_ba = make_tcp_ipv4_sll_packet([10, 1, 0, 2], [10, 1, 0, 1], 443, 53000);
+
+        let shard_ab = shard_for_packet_with_linktype(&pkt_ab, 8, LinkType::LinuxSll);
+        let shard_ba = shard_for_packet_with_linktype(&pkt_ba, 8, LinkType::LinuxSll);
+        assert_eq!(shard_ab, shard_ba);
+    }
+
+    #[test]
+    fn loopback_null_same_flow_same_shard() {
+        let pkt_ab =
+            make_tcp_ipv4_loopback_null_packet([127, 0, 0, 1], [127, 0, 0, 1], 60000, 8080);
+        let pkt_ba =
+            make_tcp_ipv4_loopback_null_packet([127, 0, 0, 1], [127, 0, 0, 1], 8080, 60000);
+
+        let shard_ab = shard_for_packet_with_linktype(&pkt_ab, 8, LinkType::LoopbackNull);
+        let shard_ba = shard_for_packet_with_linktype(&pkt_ba, 8, LinkType::LoopbackNull);
+        assert_eq!(shard_ab, shard_ba);
+    }
+
+    #[test]
+    fn raw_ip_same_flow_same_shard() {
+        let pkt_ab = make_tcp_ipv4_raw_packet([192, 0, 2, 10], [192, 0, 2, 20], 40000, 8443);
+        let pkt_ba = make_tcp_ipv4_raw_packet([192, 0, 2, 20], [192, 0, 2, 10], 8443, 40000);
+
+        let shard_ab = shard_for_packet_with_linktype(&pkt_ab, 8, LinkType::RawIp);
+        let shard_ba = shard_for_packet_with_linktype(&pkt_ba, 8, LinkType::RawIp);
+        assert_eq!(shard_ab, shard_ba);
     }
 
     fn make_tcp_ipv6_frame_with_hop_by_hop(

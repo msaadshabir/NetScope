@@ -29,6 +29,7 @@ pub mod top_flows;
 pub mod worker;
 
 use crate::config::{AnalysisConfig, FlowConfig, StatsConfig, WebConfig};
+use crate::protocol::LinkType;
 use crate::web;
 use crossbeam_channel::{Sender, bounded};
 use std::path::PathBuf;
@@ -158,6 +159,8 @@ pub struct PipelineConfig {
     pub expired_flows_jsonl: Option<PathBuf>,
     /// Shared kernel/libpcap drop counters.
     pub kernel_stats: Arc<KernelPcapStats>,
+    /// Capture datalink type (applies to all packets in this run).
+    pub link_type: LinkType,
 }
 
 /// Handle returned by [`spawn`] — the capture thread uses this to dispatch
@@ -237,12 +240,14 @@ pub fn spawn(
         let web_cfg = config.web.clone();
         let heavy_hitter_top_n = config.heavy_hitter_top_n;
         let buffer_returner = buffer_returner.clone();
+        let link_type = config.link_type;
 
         let handle = thread::Builder::new()
             .name(format!("ns-worker-{}", shard_id))
             .spawn(move || {
                 let mut w = worker::Worker::new(
                     shard_id,
+                    link_type,
                     flow_cfg,
                     analysis_cfg,
                     web_cfg,
