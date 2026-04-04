@@ -7,14 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+
 - `--read-pcap <PATH>` and `capture.read_pcap` to analyze offline pcaps (supports BPF filters and can be paired with `--write-pcap` to rewrite pcaps).
 - `--expired-flows-jsonl <PATH>` to continuously write expired/evicted flow records as JSONL during capture (includes `reason = timeout | eviction`).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 - DNS (UDP/53) decoding in CLI packet views and the web packet inspector.
 - TLS ClientHello SNI extraction in CLI packet views and the web packet inspector (best-effort, packet-level; no TCP reassembly; ECH can hide SNI).
+- Non-Ethernet packet parsing for Linux cooked capture (SLL), loopback NULL/LOOP, and raw IP datalink captures.
 - Development: pinned Rust toolchain via `rust-toolchain.toml` and added CI checks for formatting, clippy, and tests.
 
 ### Fixed
+
 - Avoid duplicate DNS parsing when building web packet summaries + details.
 - `--alerts-jsonl` now works in pipeline mode (single-writer JSONL output owned by the aggregator).
 - `--list-interfaces` no longer depends on successfully loading a config file.
@@ -24,10 +27,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Web ingest flushes buffered packet samples/alerts on shutdown to avoid dropping the final partial interval.
 - Static file handler returns 404 for unknown `/api/*` paths instead of serving the SPA fallback.
 - IPv6 shard routing walks common extension headers so flows consistently hash to the same shard.
+- Shard routing now honors non-Ethernet datalink offsets (SLL, loopback, raw IP) so flow hashing remains stable in pipeline mode.
 - Pipeline capture now always shuts down worker/aggregator threads before returning, including pcap write/flush error paths.
 - IPv6 non-initial fragments are no longer treated as transport-bearing packets for flow/anomaly tracking and shard port hashing.
 
 ### Changed
+
 - Clarified configuration fields and streamlined CLI documentation examples.
 - Restored technical limitations and prerequisites to project documentation.
 - Refined tuning guides regarding web dashboard performance and memory optimization.
@@ -38,11 +43,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Internal refactors to improve maintainability (flow module split, shared packet formatting helpers).
 
 ### Removed
+
 - Removed low-signal and perf/size guard tests (including the ignored 1M-flow RSS budget test and layout size assertions).
 
 ## [0.2.0] - 2026-03-15
 
 ### Added
+
 - Criterion benchmark `handshake_sequence` for TCP 3-way handshake hot path measurement
 - Dashboard usability and performance improvements
 - Synthetic memory benchmark and scale-mode regression fixes
@@ -54,6 +61,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Comprehensive documentation updates and .gitignore improvements
 
 ### Changed
+
 - Documentation refresh clarifying web, config, and performance sections
 - Updated CLI vs config-only documentation with examples
 - Linked Getting Started and Troubleshooting documentation pages
@@ -73,6 +81,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Refreshed documentation to reduce overlap between setup, usage, CLI, configuration, and feature guides
 
 ### Removed
+
 - `CONTRIBUTING.md`
 - `docs/index.md` (fully redundant with main README.md documentation table)
 - `docs/perf-validation.md` (guidance moved to performance.md and scripts/perf/)

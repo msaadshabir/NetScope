@@ -35,6 +35,8 @@ netscope/
     protocol/
       mod.rs                    # Packet parsing entry point, ParsedPacket type
       ethernet.rs               # Ethernet II header parser
+      loopback.rs               # Loopback NULL/LOOP header parser
+      sll.rs                    # Linux cooked capture (SLL) header parser
       ipv4.rs                   # IPv4 header parser (with checksum verification)
       ipv6.rs                   # IPv6 header parser
       tcp.rs                    # TCP header parser
@@ -106,7 +108,7 @@ cargo bench
 
 Benchmarks are in `benches/hot_path.rs` using Criterion. They measure:
 
-- `parse_packet` -- full protocol stack parsing (Ethernet + IPv4 + TCP).
+- `parse_packet` -- full protocol stack parsing (e.g., Ethernet + IPv4 + TCP).
 - `flow_observe` -- flow table lookup and update for existing and new flows.
 - `shard_routing` -- 5-tuple extraction and hash computation.
 - `handshake_sequence` -- combined `parse_packet + FlowTracker::observe` for a full TCP 3-way handshake (SYN → SYN-ACK → ACK).

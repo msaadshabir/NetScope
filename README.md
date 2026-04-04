@@ -6,7 +6,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 
 - **Live packet capture** via libpcap with BPF filter support
 - **Offline pcap analysis** via `--read-pcap` (supports BPF filters; no elevated privileges required)
-- **Zero-copy protocol parsing** -- Ethernet, 802.1Q VLAN, IPv4, IPv6, TCP, UDP, ICMP, DNS (UDP/53 decode), TLS ClientHello SNI extraction (best-effort, packet-level)
+- **Zero-copy protocol parsing** -- Ethernet, Linux SLL, loopback NULL/LOOP, raw IP, 802.1Q VLAN, IPv4, IPv6, TCP, UDP, ICMP, DNS (UDP/53 decode), TLS ClientHello SNI extraction (best-effort, packet-level)
 - **Flow tracking** -- bidirectional counters, TCP state machine, RTT estimation, retransmission and out-of-order detection
 - **Scale-mode flow storage** -- compact internal flow tables activate automatically when deep TCP analysis is disabled
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
@@ -58,6 +58,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Of
 
 - Live capture typically requires **root privileges**. Offline pcap analysis (`--read-pcap`) does not. The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
 - IPv6 extension headers are partially supported: common headers are walked to find the effective transport payload and shard routing key.
+- Supported datalink types include Ethernet, Linux SLL, loopback NULL/LOOP, and raw IP. Other datalink types are currently reported as unsupported.
 - IPv4 non-initial fragments are skipped for flow tracking.
 - TLS SNI extraction is packet-level and best-effort. ClientHello messages split across TCP segments may be missed, ECH can hide the real SNI, and SNI is only surfaced when it looks like a valid ASCII hostname (labels `A-Za-z0-9-`).
 - Timestamps are formatted as `HH:MM:SS.microseconds` from UNIX-epoch UTC capture times.

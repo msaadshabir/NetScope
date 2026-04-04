@@ -14,7 +14,7 @@ Then open <http://127.0.0.1:8080>.
 - **Time-series chart** -- dual-axis throughput and packet rate history.
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.
-- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet, IP, TCP/UDP/ICMP, DNS for UDP/53, and TLS ClientHello SNI when detected) and hex dump, fetched on demand from the server.
+- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet / Linux SLL / loopback / raw IP, IP, TCP/UDP/ICMP, DNS for UDP/53, and TLS ClientHello SNI when detected) and hex dump, fetched on demand from the server.
 - **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan).
 - **Perf overlay** -- open `/?perf=1` to show dashboard fps, render latency p50/p95/p99, dropped frame count, and estimated client/server clock offset.
 - **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection.
@@ -75,12 +75,12 @@ In both modes, the web server runs in a dedicated thread with its own tokio runt
 
 The server sends JSON messages to clients, each with a `"type"` field. The current live path uses merged `frame` messages plus a few request/response helpers:
 
-| Type            | Description                                                                  |
-| --------------- | ---------------------------------------------------------------------------- |
-| `hello`         | Sent on connect. Contains `version` and `tick_ms`.                           |
+| Type            | Description                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------ |
+| `hello`         | Sent on connect. Contains `version` and `tick_ms`.                                                     |
 | `frame`         | Primary live update message. Contains `frame_seq`, a `tick` payload, and batched `packets` / `alerts`. |
-| `packet_detail` | Full protocol tree and hex dump for a specific packet (requested by client). |
-| `perf_pong`     | Response to client perf probes with echoed `client_ts` and `server_ts`.      |
+| `packet_detail` | Full protocol tree and hex dump for a specific packet (requested by client).                           |
+| `perf_pong`     | Response to client perf probes with echoed `client_ts` and `server_ts`.                                |
 
 Standalone `stats_tick`, `packet_sample`, and `alert` variants still exist in the Rust message enum, but the current server path emits merged `frame` messages for live updates.
 

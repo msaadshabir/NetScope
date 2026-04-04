@@ -49,6 +49,22 @@ Possible causes:
 3. **No traffic** -- Run `sudo tcpdump -i <interface> -c 10` to verify the interface has traffic.
 4. **Firewall** -- Some firewalls block promiscuous mode. Try `--no-promiscuous`.
 
+## Unsupported Datalink Type
+
+**Symptom:** NetScope prints something like `Datalink: Unsupported(<n>)` at startup, and the summary shows a high `Parse errors` count (often equal to the number of captured packets).
+
+**Cause:** The capture interface or pcap file uses a link-layer format NetScope does not currently decode.
+
+**Fixes:**
+
+1. Prefer capturing on a specific interface (for example `-i eth0`) instead of pseudo-devices that may use uncommon datalink formats.
+2. If you are generating pcaps with `tcpdump`, consider forcing a supported datalink type via `-y` (for example `-y EN10MB` for Ethernet or `-y LINUX_SLL` for Linux cooked capture v1).
+3. For existing pcaps, re-capture with a supported link type when possible.
+
+Supported datalink types currently include Ethernet, Linux SLL, loopback NULL/LOOP, and raw IP.
+
+Note: raw-IP pcaps are commonly tagged as link type `101` or `12` depending on the tool; NetScope treats both as raw IP.
+
 ## High Kernel Drop Rate
 
 **Symptom:** Summary shows high `Kernel dropped` count or drop rate.

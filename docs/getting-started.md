@@ -96,14 +96,15 @@ For dashboard endpoints, live update behavior, and tuning guidance, see [Web Das
 
 ## Supported Protocols
 
-| Layer     | Protocols                               |
-| --------- | --------------------------------------- |
-| Link      | Ethernet II, 802.1Q VLAN                |
-| Network   | IPv4 (with checksum verification), IPv6 |
-| Transport | TCP, UDP, ICMP                          |
+| Layer     | Protocols                                                              |
+| --------- | ---------------------------------------------------------------------- |
+| Link      | Ethernet II (incl. 802.1Q VLAN), Linux SLL, loopback NULL/LOOP, raw IP |
+| Network   | IPv4 (with checksum verification), IPv6                                |
+| Transport | TCP, UDP, ICMP                                                         |
 
 **Known limitations:**
 
+- Only a small set of datalink types are supported for parsing/routing; other link types are reported as unsupported.
 - IPv6 extension-header parsing is intentionally limited to common headers (bounded-depth walk) and may not fully decode uncommon chains.
 - IPv4 and IPv6 non-initial fragments are skipped for flow tracking (the transport header is only present in the first fragment).
 
