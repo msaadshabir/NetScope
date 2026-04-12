@@ -1,0 +1,4 @@
+Chart.js version: 4.5.1
+Bundle file: chart.umd.min.js
+Source: https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js
+License file: LICENSE.md
