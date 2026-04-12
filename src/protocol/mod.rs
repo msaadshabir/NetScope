@@ -341,11 +341,14 @@ pub fn parse_packet_with_linktype(
     })
 }
 
+type NetworkParseResult<'a> =
+    Result<(Option<NetworkHeader<'a>>, &'a [u8], Option<IpProtocol>), ParseError>;
+
 #[inline]
 fn parse_network_from_ether_type<'a>(
     ether_type: EtherType,
     remaining: &'a [u8],
-) -> Result<(Option<NetworkHeader<'a>>, &'a [u8], Option<IpProtocol>), ParseError> {
+) -> NetworkParseResult<'a> {
     let parsed = match ether_type {
         EtherType::Ipv4 => {
             let hdr = ipv4::Ipv4Header::parse(remaining)?;
@@ -366,9 +369,7 @@ fn parse_network_from_ether_type<'a>(
 }
 
 #[inline]
-fn parse_network_from_ip_payload<'a>(
-    remaining: &'a [u8],
-) -> Result<(Option<NetworkHeader<'a>>, &'a [u8], Option<IpProtocol>), ParseError> {
+fn parse_network_from_ip_payload<'a>(remaining: &'a [u8]) -> NetworkParseResult<'a> {
     if remaining.is_empty() {
         return Err(ParseError::TooShort {
             expected: 1,

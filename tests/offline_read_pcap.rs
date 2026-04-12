@@ -36,7 +36,7 @@ fn write_test_pcap(path: &Path, linktype: u32, packet: &[u8]) {
         .expect("failed to write incl_len");
     file.write_all(&(packet.len() as u32).to_le_bytes()) // orig_len
         .expect("failed to write orig_len");
-    file.write_all(&packet).expect("failed to write packet");
+    file.write_all(packet).expect("failed to write packet");
     file.flush().expect("failed to flush pcap file");
 }
 

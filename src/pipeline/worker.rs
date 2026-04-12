@@ -67,17 +67,28 @@ pub struct Worker {
     tick_next: Instant,
 }
 
+pub struct WorkerConfigBundle {
+    pub flow_cfg: FlowConfig,
+    pub analysis_cfg: AnalysisConfig,
+    pub web_cfg: WebConfig,
+    pub heavy_hitter_top_n: usize,
+    pub emit_expired_flows: bool,
+}
+
 impl Worker {
     pub fn new(
         shard_id: usize,
         link_type: protocol::LinkType,
-        flow_cfg: FlowConfig,
-        analysis_cfg: AnalysisConfig,
-        web_cfg: WebConfig,
-        heavy_hitter_top_n: usize,
-        emit_expired_flows: bool,
+        cfg: WorkerConfigBundle,
         buffer_returner: PacketBufReturner,
     ) -> Self {
+        let WorkerConfigBundle {
+            flow_cfg,
+            analysis_cfg,
+            web_cfg,
+            heavy_hitter_top_n,
+            emit_expired_flows,
+        } = cfg;
         let tick_interval = tick_interval_for(&web_cfg);
         let flow_tracker = FlowTracker::new(
             flow_cfg.timeout_secs,
