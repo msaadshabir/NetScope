@@ -248,11 +248,13 @@ pub fn spawn(
                 let mut w = worker::Worker::new(
                     shard_id,
                     link_type,
-                    flow_cfg,
-                    analysis_cfg,
-                    web_cfg,
-                    heavy_hitter_top_n,
-                    emit_expired_flows,
+                    worker::WorkerConfigBundle {
+                        flow_cfg,
+                        analysis_cfg,
+                        web_cfg,
+                        heavy_hitter_top_n,
+                        emit_expired_flows,
+                    },
                     buffer_returner,
                 );
                 w.run(pkt_rx, agg_tx, &running);
