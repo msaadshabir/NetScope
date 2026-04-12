@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 - DNS (UDP/53) decoding in CLI packet views and the web packet inspector.
 - TLS ClientHello SNI extraction in CLI packet views and the web packet inspector (best-effort, packet-level; no TCP reassembly; ECH can hide SNI).
+- Vendored Chart.js for the embedded web dashboard so charts render in offline/airgapped environments (no CDN runtime dependency).
 - Non-Ethernet packet parsing for Linux cooked capture (SLL), loopback NULL/LOOP, and raw IP datalink captures.
 - Development: pinned Rust toolchain via `rust-toolchain.toml` and added CI checks for formatting, clippy, and tests.
 

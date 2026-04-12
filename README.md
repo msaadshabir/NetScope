@@ -11,7 +11,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Scale-mode flow storage** -- compact internal flow tables activate automatically when deep TCP analysis is disabled
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
-- **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames
+- **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames (Chart.js served locally for offline/airgapped use)
 - **Live drop metrics** -- periodic kernel/libpcap drop and interface drop deltas/totals (CLI + dashboard)
 - **Export** -- flows to JSON/CSV, alerts to JSONL (inline and pipeline modes), expired/evicted flows to JSONL, packets to pcap
 - **TOML configuration** with full CLI override support
@@ -66,3 +66,5 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Of
 ## License
 
 MIT License. See [LICENSE](LICENSE).
+
+This project vendors Chart.js (MIT) for the embedded web dashboard. See `web/static/vendor/chartjs/LICENSE.md`.

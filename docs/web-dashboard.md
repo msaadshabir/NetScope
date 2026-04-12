@@ -30,7 +30,7 @@ TLS ClientHello SNI detection is best-effort and packet-level (no TCP reassembly
 | `/ws`         | GET    | WebSocket endpoint for real-time data.                               |
 | `/api/health` | GET    | Health check, returns `200 OK`.                                      |
 
-The dashboard HTML/CSS/JS is embedded into the binary at compile time (no separate frontend build step). The chart library is loaded from a CDN at runtime, so charts may not render in offline environments.
+The dashboard HTML/CSS/JS is embedded into the binary at compile time (no separate frontend build step). Chart.js is vendored under `web/static/vendor/chartjs/` and served locally, so charts render in airgapped/offline environments. The bundle is served at `/vendor/chartjs/chart.umd.min.js`.
 
 Exact UI details live in the embedded frontend assets under `web/static/index.html`, so presentation-specific behavior is implemented there.
 

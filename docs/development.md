@@ -17,6 +17,7 @@ netscope/
   web/
     static/
       index.html                # Web dashboard frontend (embedded at compile time)
+      vendor/chartjs/           # Vendored Chart.js bundle + license (offline/airgapped dashboard)
   src/
     main.rs                     # Binary entry point, CLI arg merging, capture loops
     lib.rs                      # Library crate root: re-exports all modules, shared helpers used by main.rs and pipeline workers (maybe_analyze_anomaly, build_packet_data)
@@ -60,6 +61,16 @@ netscope/
       messages.rs               # WebSocket message types (server->client, client->server)
       packet_store.rs           # Ring buffer for packet detail lookups
 ```
+
+## Vendored Frontend Dependencies
+
+The dashboard frontend is embedded at compile time (no separate frontend build). Chart.js is vendored under `web/static/vendor/chartjs/` and loaded from `/vendor/chartjs/chart.umd.min.js` so the dashboard works in offline/airgapped environments.
+
+When updating Chart.js, keep these files in sync:
+
+- `web/static/vendor/chartjs/chart.umd.min.js`
+- `web/static/vendor/chartjs/VERSION.txt`
+- `web/static/vendor/chartjs/LICENSE.md`
 
 ## Building
 
