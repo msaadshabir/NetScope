@@ -57,7 +57,9 @@ if [[ ! -x "$BINARY" ]]; then
 fi
 
 if [[ -z "$TCPREPLAY_BIN" ]]; then
-  echo "error: tcpreplay is required for throughput validation" >&2
+  echo "error: tcpreplay is required for throughput validation (install it and ensure it's on PATH)" >&2
+  echo "hint: macOS: brew install tcpreplay" >&2
+  echo "hint: Debian/Ubuntu: sudo apt-get install tcpreplay" >&2
   exit 1
 fi
 

@@ -30,15 +30,6 @@ cat <<EOF
 
 Completed local automated checks.
 
-Accepted baseline evidence already recorded:
-1) Throughput/no-loss (target 1)
-   tmp/perf/20260312-175157.throughput.netscope.log
-   Result: sustained 6,000,000-packet replay, drops=0, Dispatch drops: 0, Kernel dropped: 0, Interface dropped: 0
-
-2) Web fps/latency (target 3)
-   tmp/perf/20260313-151454.web.netscope.log + tmp/perf/20260313-151454.web.tcpreplay.log
-   Result: 29.3 fps, p99 31.5ms, drop 0
-
 To re-run manual spot checks when needed:
   scripts/perf/validate-throughput.sh <iface> <trace.pcap> [packet_count]
   scripts/perf/validate-web.sh [iface] [trace.pcap]

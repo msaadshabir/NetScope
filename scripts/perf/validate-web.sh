@@ -69,7 +69,9 @@ if [[ -n "$IFACE" && -z "$TRACE" ]]; then
 fi
 
 if [[ -n "$IFACE" && -z "$TCPREPLAY_BIN" ]]; then
-  echo "error: tcpreplay is required when interface/trace are provided" >&2
+  echo "error: tcpreplay is required when interface/trace are provided (install it and ensure it's on PATH)" >&2
+  echo "hint: macOS: brew install tcpreplay" >&2
+  echo "hint: Debian/Ubuntu: sudo apt-get install tcpreplay" >&2
   exit 1
 fi
 
@@ -109,7 +111,7 @@ fi
 echo
 echo "Starting NetScope web run. Open: http://127.0.0.1:8080/?perf=1"
 echo "Quick spot-check target: ~30fps, p99 < 100ms, drop 0."
-echo "Accepted reference: tmp/perf/20260313-151454.web.*.log -> 29.3 fps | p99 31.5ms | drop 0"
+echo "Compare against previous runs in tmp/perf/ when regression-testing."
 echo "Let the overlay settle for ~30s; use a longer soak only when regression-testing."
 
 args=(
