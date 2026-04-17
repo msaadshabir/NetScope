@@ -31,6 +31,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Shard routing now honors non-Ethernet datalink offsets (SLL, loopback, raw IP) so flow hashing remains stable in pipeline mode.
 - Pipeline capture now always shuts down worker/aggregator threads before returning, including pcap write/flush error paths.
 - IPv6 non-initial fragments are no longer treated as transport-bearing packets for flow/anomaly tracking and shard port hashing.
+- Compact flow keys no longer silently accept unexpected IP protocol numbers (logs a one-time warning and defaults to TCP; debug builds assert).
 
 ### Changed
 
@@ -42,6 +43,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Packet detail store now uses fixed-size O(1) slot storage keyed by packet id modulo capacity, with stale-id rejection outside the active window.
 - Local perf validation is now captured via `scripts/perf/validate.sh` (release build + representative benchmark + CLI synthetic-flow memory validation).
 - Internal refactors to improve maintainability (flow module split, shared packet formatting helpers).
+- Flow CSV export avoids per-row string allocations by writing fields directly.
+- Perf helper scripts print `tcpreplay` install hints and removed stale accepted-baseline text.
 
 ### Removed
 

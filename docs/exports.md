@@ -78,28 +78,29 @@ Example row:
 tcp,192.168.1.42,54321,93.184.216.34,443,1706123400.123456,1706123460.654321,60.530865,150,200,12400,485000,350,497400,65712.300,established,a_to_b,2,0,15.200,12.800,14.100,45
 ```
 
-Fields containing commas, double-quotes, or newlines are quoted per CSV conventions. IPv6 addresses use colons and do not require quoting.
+The CSV export currently writes plain comma-separated fields without quoting/escaping. This is safe for the current schema because fields are numeric values, enum labels, and IP addresses.
+If you need strict CSV quoting/escaping for downstream ingestion, prefer the JSON export or post-process the CSV with a CSV library.
 
 ### Field Reference
 
-| Field | Type | Description |
-|---|---|---|
-| `protocol` | string | `"tcp"` or `"udp"`. |
-| `endpoint_a` / `endpoint_b` | object | IP + port. Endpoint A is the canonically "smaller" endpoint. |
-| `first_seen` / `last_seen` | float | Unix timestamps with microsecond precision. |
-| `duration_secs` | float | `last_seen - first_seen`. |
-| `packets_a_to_b` / `packets_b_to_a` | int | Packet counts per direction. |
-| `bytes_a_to_b` / `bytes_b_to_a` | int | Byte counts per direction (wire length). |
-| `packets_total` / `bytes_total` | int | Sum of both directions. |
-| `avg_bps` | float | Average bits per second over the flow's duration. |
-| `tcp_state` | string or null | TCP state: `syn_sent`, `syn_ack`, `established`, `fin_wait`, `closed`, `reset`, `unknown`. Null for UDP. |
-| `client` | string or null | Which side initiated: `"a_to_b"` or `"b_to_a"`. Null if no SYN was observed. |
-| `retransmissions` | int | Detected TCP retransmissions. |
-| `out_of_order` | int | Detected out-of-order segments. |
-| `rtt_last_ms` | float or null | Most recent RTT sample (ms). |
-| `rtt_min_ms` | float or null | Minimum observed RTT (ms). |
-| `rtt_ewma_ms` | float or null | EWMA RTT (ms). |
-| `rtt_samples` | int | Number of RTT samples collected. |
+| Field                               | Type           | Description                                                                                              |
+| ----------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------- |
+| `protocol`                          | string         | `"tcp"` or `"udp"`.                                                                                      |
+| `endpoint_a` / `endpoint_b`         | object         | IP + port. Endpoint A is the canonically "smaller" endpoint.                                             |
+| `first_seen` / `last_seen`          | float          | Unix timestamps with microsecond precision.                                                              |
+| `duration_secs`                     | float          | `last_seen - first_seen`.                                                                                |
+| `packets_a_to_b` / `packets_b_to_a` | int            | Packet counts per direction.                                                                             |
+| `bytes_a_to_b` / `bytes_b_to_a`     | int            | Byte counts per direction (wire length).                                                                 |
+| `packets_total` / `bytes_total`     | int            | Sum of both directions.                                                                                  |
+| `avg_bps`                           | float          | Average bits per second over the flow's duration.                                                        |
+| `tcp_state`                         | string or null | TCP state: `syn_sent`, `syn_ack`, `established`, `fin_wait`, `closed`, `reset`, `unknown`. Null for UDP. |
+| `client`                            | string or null | Which side initiated: `"a_to_b"` or `"b_to_a"`. Null if no SYN was observed.                             |
+| `retransmissions`                   | int            | Detected TCP retransmissions.                                                                            |
+| `out_of_order`                      | int            | Detected out-of-order segments.                                                                          |
+| `rtt_last_ms`                       | float or null  | Most recent RTT sample (ms).                                                                             |
+| `rtt_min_ms`                        | float or null  | Minimum observed RTT (ms).                                                                               |
+| `rtt_ewma_ms`                       | float or null  | EWMA RTT (ms).                                                                                           |
+| `rtt_samples`                       | int            | Number of RTT samples collected.                                                                         |
 
 ## Alert Export (JSONL)
 
@@ -129,5 +130,29 @@ sudo netscope --expired-flows-jsonl expired-flows.jsonl
 Each line is a standalone JSON object with `reason` (`"timeout"` or `"eviction"`) plus the flow snapshot fields:
 
 ```json
-{"ts":1706123500.25,"reason":"timeout","protocol":"tcp","endpoint_a":{"ip":"10.0.0.5","port":51514},"endpoint_b":{"ip":"10.0.0.10","port":443},"first_seen":1706123492.11,"last_seen":1706123498.98,"duration_secs":6.87,"packets_a_to_b":12,"packets_b_to_a":9,"bytes_a_to_b":1640,"bytes_b_to_a":9020,"packets_total":21,"bytes_total":10660,"avg_bps":12417.17,"tcp_state":"established","client":"a_to_b","retransmissions":0,"out_of_order":0,"rtt_last_ms":2.1,"rtt_min_ms":1.8,"rtt_ewma_ms":2.0,"rtt_samples":5}
+{
+  "ts": 1706123500.25,
+  "reason": "timeout",
+  "protocol": "tcp",
+  "endpoint_a": { "ip": "10.0.0.5", "port": 51514 },
+  "endpoint_b": { "ip": "10.0.0.10", "port": 443 },
+  "first_seen": 1706123492.11,
+  "last_seen": 1706123498.98,
+  "duration_secs": 6.87,
+  "packets_a_to_b": 12,
+  "packets_b_to_a": 9,
+  "bytes_a_to_b": 1640,
+  "bytes_b_to_a": 9020,
+  "packets_total": 21,
+  "bytes_total": 10660,
+  "avg_bps": 12417.17,
+  "tcp_state": "established",
+  "client": "a_to_b",
+  "retransmissions": 0,
+  "out_of_order": 0,
+  "rtt_last_ms": 2.1,
+  "rtt_min_ms": 1.8,
+  "rtt_ewma_ms": 2.0,
+  "rtt_samples": 5
+}
 ```

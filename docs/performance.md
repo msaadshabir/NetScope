@@ -20,13 +20,13 @@ NetScope uses several performance-focused design choices on the hot path:
 
 Criterion benchmarks measured on Apple M-series (`cargo bench`):
 
-| Benchmark | Latency | Throughput |
-|---|---|---|
-| `parse_packet` (54B TCP SYN) | ~5.8 ns | ~172M pkt/s |
-| `parse_packet` (1454B TCP data) | ~5.8 ns | ~173M pkt/s |
-| `flow_observe` (existing flow) | ~25 ns | ~40M pkt/s |
-| `flow_observe` (new flow, cold setup) | ~7.7 us | ~130k pkt/s |
-| `shard_routing` (4 shards) | ~4.1 ns | ~246M pkt/s |
+| Benchmark                                  | Latency     | Throughput  |
+| ------------------------------------------ | ----------- | ----------- |
+| `parse_packet` (54B TCP SYN)               | ~5.8 ns     | ~172M pkt/s |
+| `parse_packet` (1454B TCP data)            | ~5.8 ns     | ~173M pkt/s |
+| `flow_observe` (existing flow)             | ~25 ns      | ~40M pkt/s  |
+| `flow_observe` (new flow, cold setup)      | ~7.7 us     | ~130k pkt/s |
+| `shard_routing` (4 shards)                 | ~4.1 ns     | ~246M pkt/s |
 | `handshake_sequence` (SYN → SYN-ACK → ACK) | ~105 ns/pkt | ~9.6M pkt/s |
 
 These numbers reflect isolated function-level performance measured by Criterion and will vary by CPU, compiler version, and background load.
@@ -42,6 +42,9 @@ cargo bench
 This runs the Criterion benchmarks defined in `benches/hot_path.rs`. Results are written to `target/criterion/` with HTML reports.
 
 For repeatable end-to-end checks (pcap replay throughput, web dashboard fps/latency, etc.), see `scripts/perf/`.
+
+Note: replay-based perf checks (`scripts/perf/validate-throughput.sh`, `scripts/perf/validate-web.sh`) require `tcpreplay`.
+On macOS: `brew install tcpreplay`. On Debian/Ubuntu: `sudo apt-get install tcpreplay`.
 
 For a single command that captures a small set of representative local checks (release build, one hot-path benchmark, and synthetic-flow memory validation), run:
 

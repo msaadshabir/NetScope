@@ -104,6 +104,9 @@ cargo test
 
 For local performance/memory sanity checks, use `scripts/perf/validate.sh` (release build + a representative hot-path benchmark + synthetic-flow memory validation). These checks are intentionally separate from the unit/integration test suite.
 
+Replay-based perf checks (`scripts/perf/validate-throughput.sh`, `scripts/perf/validate-web.sh`) require `tcpreplay`.
+On macOS: `brew install tcpreplay`. On Debian/Ubuntu: `sudo apt-get install tcpreplay`.
+
 Tests are co-located with the source code in `#[cfg(test)]` modules. Key test areas:
 
 - `src/flow/key.rs` -- flow key ordering/canonicalization and compact key types (including scale-mode IPv4/IPv6 keys).
