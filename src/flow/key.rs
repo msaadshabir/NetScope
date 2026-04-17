@@ -40,12 +40,33 @@ impl FlowProtocol {
     }
 
     #[inline]
-    fn from_u8(value: u8) -> Option<Self> {
+    fn from_u8_compact(value: u8) -> Self {
         match value {
-            6 => Some(FlowProtocol::Tcp),
-            17 => Some(FlowProtocol::Udp),
-            _ => None,
+            6 => FlowProtocol::Tcp,
+            17 => FlowProtocol::Udp,
+            other => Self::unexpected_compact_proto(other),
         }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn unexpected_compact_proto(value: u8) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        static WARNED: AtomicBool = AtomicBool::new(false);
+        if !WARNED.swap(true, Ordering::Relaxed) {
+            tracing::warn!(
+                proto = value,
+                "unexpected IP protocol number in compact flow key; defaulting to tcp"
+            );
+        }
+
+        debug_assert!(
+            false,
+            "unexpected IP protocol number in compact flow key: {}",
+            value
+        );
+        FlowProtocol::Tcp
     }
 }
 
@@ -171,7 +192,7 @@ impl FlowKeyV4 {
 
     #[inline]
     pub(crate) fn to_flow_key(self) -> FlowKey {
-        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
+        let protocol = FlowProtocol::from_u8_compact(self.proto);
         FlowKey {
             protocol,
             a: Endpoint {
@@ -253,7 +274,7 @@ impl FlowKeyV6 {
 
     #[inline]
     pub(crate) fn to_flow_key(self) -> FlowKey {
-        let protocol = FlowProtocol::from_u8(self.proto).unwrap_or(FlowProtocol::Tcp);
+        let protocol = FlowProtocol::from_u8_compact(self.proto);
         FlowKey {
             protocol,
             a: Endpoint {
@@ -308,5 +329,73 @@ fn ip_key(ip: IpAddr) -> (u8, [u8; 16]) {
             (4, bytes)
         }
         IpAddr::V6(addr) => (6, addr.octets()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn sample_v4_compact_key() -> FlowKeyV4 {
+        let key = FlowKey {
+            protocol: FlowProtocol::Udp,
+            a: Endpoint {
+                ip: IpAddr::V4(Ipv4Addr::new(10, 1, 2, 3)),
+                port: 12345,
+            },
+            b: Endpoint {
+                ip: IpAddr::V4(Ipv4Addr::new(10, 9, 8, 7)),
+                port: 443,
+            },
+        };
+        FlowKeyV4::from_flow_key(&key).expect("v4 flow key should compact")
+    }
+
+    fn sample_v6_compact_key() -> FlowKeyV6 {
+        let key = FlowKey {
+            protocol: FlowProtocol::Udp,
+            a: Endpoint {
+                ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 1, 2, 3, 4, 5, 6)),
+                port: 5353,
+            },
+            b: Endpoint {
+                ip: IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 9, 8, 7, 6, 5, 4)),
+                port: 443,
+            },
+        };
+        FlowKeyV6::from_flow_key(&key).expect("v6 flow key should compact")
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn invalid_compact_proto_is_detected_in_debug() {
+        let mut key_v4 = sample_v4_compact_key();
+        key_v4.proto = 1;
+        let v4_panicked = std::panic::catch_unwind(|| key_v4.to_flow_key()).is_err();
+        assert!(
+            v4_panicked,
+            "v4 invalid proto should trigger debug assertion"
+        );
+
+        let mut key_v6 = sample_v6_compact_key();
+        key_v6.proto = 1;
+        let v6_panicked = std::panic::catch_unwind(|| key_v6.to_flow_key()).is_err();
+        assert!(
+            v6_panicked,
+            "v6 invalid proto should trigger debug assertion"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn invalid_compact_proto_falls_back_to_tcp_in_release() {
+        let mut key_v4 = sample_v4_compact_key();
+        key_v4.proto = 1;
+        assert_eq!(key_v4.to_flow_key().protocol, FlowProtocol::Tcp);
+
+        let mut key_v6 = sample_v6_compact_key();
+        key_v6.proto = 1;
+        assert_eq!(key_v6.to_flow_key().protocol, FlowProtocol::Tcp);
     }
 }
