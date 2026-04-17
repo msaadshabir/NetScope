@@ -1,4 +1,5 @@
 use crate::protocol::{self, LinkHeader, ParsedPacket, TransportHeader};
+use std::fmt::Write as _;
 
 pub fn parse_dns_and_tls<'a>(
     parsed: &'a ParsedPacket<'a>,
@@ -67,8 +68,8 @@ pub fn summarise_packet(
                         hdr.window_size()
                     );
                 }
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
+                let _ = write!(src, ":{}", hdr.src_port());
+                let _ = write!(dst, ":{}", hdr.dst_port());
             }
             protocol::TransportHeader::Udp(hdr) => {
                 if let Some(dns) = dns {
@@ -78,8 +79,8 @@ pub fn summarise_packet(
                     proto = "UDP".into();
                     info = format!("len={}", hdr.length());
                 }
-                src.push_str(&format!(":{}", hdr.src_port()));
-                dst.push_str(&format!(":{}", hdr.dst_port()));
+                let _ = write!(src, ":{}", hdr.src_port());
+                let _ = write!(dst, ":{}", hdr.dst_port());
             }
             protocol::TransportHeader::Icmp(hdr) => {
                 proto = "ICMP".into();
@@ -97,10 +98,10 @@ pub fn format_hex_dump(data: &[u8]) -> String {
         let end = (offset + 16).min(data.len());
         let chunk = &data[offset..end];
 
-        out.push_str(&format!("{:04x}  ", offset));
+        let _ = write!(out, "{:04x}  ", offset);
 
         for (i, byte) in chunk.iter().enumerate() {
-            out.push_str(&format!("{:02x} ", byte));
+            let _ = write!(out, "{:02x} ", byte);
             if i == 7 {
                 out.push(' ');
             }

@@ -100,7 +100,41 @@ pub fn build_packet_data(
     let mut layers = Vec::new();
 
     // Link layer
-    match &parsed.link {
+    push_link_layer(&mut layers, &parsed.link);
+
+    // VLAN
+    push_vlan_layer(&mut layers, parsed.vlan.as_ref());
+
+    // Network
+    push_network_layer(&mut layers, parsed.network.as_ref());
+
+    // Transport
+    push_transport_layers(
+        &mut layers,
+        parsed.transport.as_ref(),
+        dns.as_ref(),
+        tls.as_ref(),
+    );
+
+    // Hex dump (truncated)
+    let dump_len = raw_data.len().min(max_payload_bytes);
+    let hex_dump = packet_format::format_hex_dump(&raw_data[..dump_len]);
+
+    let stored = web::messages::StoredPacket {
+        id,
+        ts,
+        layers,
+        hex_dump,
+    };
+
+    (sample, stored)
+}
+
+fn push_link_layer<'a>(
+    layers: &mut Vec<web::messages::LayerDetail>,
+    link: &protocol::LinkHeader<'a>,
+) {
+    match link {
         protocol::LinkHeader::Ethernet(eth) => {
             layers.push(web::messages::LayerDetail {
                 name: "Ethernet".into(),
@@ -154,9 +188,10 @@ pub fn build_packet_data(
             });
         }
     }
+}
 
-    // VLAN
-    if let Some(vlan) = &parsed.vlan {
+fn push_vlan_layer(layers: &mut Vec<web::messages::LayerDetail>, vlan: Option<&protocol::VlanTag>) {
+    if let Some(vlan) = vlan {
         layers.push(web::messages::LayerDetail {
             name: "VLAN (802.1Q)".into(),
             fields: vec![
@@ -166,9 +201,13 @@ pub fn build_packet_data(
             ],
         });
     }
+}
 
-    // Network
-    if let Some(net) = &parsed.network {
+fn push_network_layer<'a>(
+    layers: &mut Vec<web::messages::LayerDetail>,
+    network: Option<&protocol::NetworkHeader<'a>>,
+) {
+    if let Some(net) = network {
         match net {
             protocol::NetworkHeader::Ipv4(hdr) => {
                 layers.push(web::messages::LayerDetail {
@@ -218,9 +257,15 @@ pub fn build_packet_data(
             }
         }
     }
+}
 
-    // Transport
-    if let Some(transport) = &parsed.transport {
+fn push_transport_layers<'a>(
+    layers: &mut Vec<web::messages::LayerDetail>,
+    transport: Option<&protocol::TransportHeader<'a>>,
+    dns: Option<&protocol::dns::DnsMessage<'a>>,
+    tls: Option<&protocol::tls::TlsClientHelloInfo>,
+) {
+    if let Some(transport) = transport {
         match transport {
             protocol::TransportHeader::Tcp(hdr) => {
                 layers.push(web::messages::LayerDetail {
@@ -236,7 +281,7 @@ pub fn build_packet_data(
                     ],
                 });
 
-                if let Some(tls) = &tls {
+                if let Some(tls) = tls {
                     layers.push(web::messages::LayerDetail {
                         name: "TLS".into(),
                         fields: vec![
@@ -329,17 +374,4 @@ pub fn build_packet_data(
             }
         }
     }
-
-    // Hex dump (truncated)
-    let dump_len = raw_data.len().min(max_payload_bytes);
-    let hex_dump = packet_format::format_hex_dump(&raw_data[..dump_len]);
-
-    let stored = web::messages::StoredPacket {
-        id,
-        ts,
-        layers,
-        hex_dump,
-    };
-
-    (sample, stored)
 }
