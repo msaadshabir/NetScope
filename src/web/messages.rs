@@ -88,6 +88,37 @@ pub struct FlowInfo {
     pub out_of_order: u64,
 }
 
+impl FlowInfo {
+    pub fn from_snapshot_delta(
+        snap: &crate::flow::FlowSnapshot,
+        delta_bytes: u64,
+        elapsed_secs: f64,
+    ) -> Self {
+        let elapsed_secs = elapsed_secs.max(0.001);
+        let delta_mbps = delta_bytes as f64 * 8.0 / elapsed_secs / 1_000_000.0;
+        Self {
+            protocol: format!("{}", snap.protocol),
+            src_ip: snap.endpoint_a.ip,
+            src_port: snap.endpoint_a.port,
+            dst_ip: snap.endpoint_b.ip,
+            dst_port: snap.endpoint_b.port,
+            bytes_a_to_b: snap.bytes_a_to_b,
+            bytes_b_to_a: snap.bytes_b_to_a,
+            packets_a_to_b: snap.packets_a_to_b,
+            packets_b_to_a: snap.packets_b_to_a,
+            bytes_total: snap.bytes_total,
+            packets_total: snap.packets_total,
+            delta_bytes,
+            delta_mbps,
+            duration_secs: snap.duration_secs,
+            tcp_state: snap.tcp_state.map(|s| format!("{}", s)),
+            rtt_ewma_ms: snap.rtt_ewma_ms,
+            retransmissions: snap.retransmissions,
+            out_of_order: snap.out_of_order,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct PacketSample {
     /// Monotonic packet id (capture-wide index).

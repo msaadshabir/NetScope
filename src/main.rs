@@ -723,27 +723,11 @@ fn run_capture_inline(
                 let top_flows: Vec<web::messages::FlowInfo> = top_deltas
                     .iter()
                     .map(|(delta, snap)| {
-                        let delta_mbps = delta.delta_bytes as f64 * 8.0 / elapsed / 1_000_000.0;
-                        web::messages::FlowInfo {
-                            protocol: format!("{}", snap.protocol),
-                            src_ip: snap.endpoint_a.ip,
-                            src_port: snap.endpoint_a.port,
-                            dst_ip: snap.endpoint_b.ip,
-                            dst_port: snap.endpoint_b.port,
-                            bytes_a_to_b: snap.bytes_a_to_b,
-                            bytes_b_to_a: snap.bytes_b_to_a,
-                            packets_a_to_b: snap.packets_a_to_b,
-                            packets_b_to_a: snap.packets_b_to_a,
-                            bytes_total: snap.bytes_total,
-                            packets_total: snap.packets_total,
-                            delta_bytes: delta.delta_bytes,
-                            delta_mbps,
-                            duration_secs: snap.duration_secs,
-                            tcp_state: snap.tcp_state.map(|s| format!("{}", s)),
-                            rtt_ewma_ms: snap.rtt_ewma_ms,
-                            retransmissions: snap.retransmissions,
-                            out_of_order: snap.out_of_order,
-                        }
+                        web::messages::FlowInfo::from_snapshot_delta(
+                            snap,
+                            delta.delta_bytes,
+                            elapsed,
+                        )
                     })
                     .collect();
                 let (kernel_drops, kernel_if_drops) = kernel_stats.take_web_interval();
