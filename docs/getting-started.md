@@ -50,7 +50,7 @@ sudo setcap cap_net_raw=eip target/release/netscope
 netscope   # no sudo needed
 ```
 
-> **Security note:** NetScope captures raw network traffic. Be mindful of privacy and compliance requirements when running on shared networks. The web dashboard binds to `127.0.0.1` by default to avoid exposing captured data to the network.
+> **Security note:** NetScope captures raw network traffic. Be mindful of privacy and compliance requirements when running on shared networks. The web dashboard binds to `127.0.0.1` by default to avoid exposing captured data to the network. For remote dashboard access, enable both `[web.tls]` and `[web.auth]`.
 
 ## First Capture
 
@@ -90,7 +90,9 @@ sudo netscope -f "tcp port 443"
 sudo netscope --web --quiet
 ```
 
-Open <http://127.0.0.1:8080> in a browser. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.
+Open <http://127.0.0.1:8080> in a browser. If TLS is enabled (`[web.tls] enabled = true`), open `https://...` instead. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.
+
+For remote access hardening, configure HTTPS + Basic auth via `[web.tls]` and `[web.auth]`, then connect to `https://...`.
 
 For dashboard endpoints, live update behavior, and tuning guidance, see [Web Dashboard](web-dashboard.md).
 

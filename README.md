@@ -31,7 +31,7 @@ sudo ./target/release/netscope
 # Analyze an offline pcap (no sudo required)
 ./target/release/netscope --read-pcap trace.pcap --quiet --stats
 
-# Start the web dashboard (open http://127.0.0.1:8080)
+# Start the web dashboard (open http://127.0.0.1:8080; use https://... if TLS is enabled)
 sudo ./target/release/netscope --web --quiet
 ```
 
@@ -56,7 +56,7 @@ Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Of
 
 ## Notes
 
-- Live capture typically requires **root privileges**. Offline pcap analysis (`--read-pcap`) does not. The web dashboard binds to `127.0.0.1` by default. Binding to `0.0.0.0` exposes live traffic data with no authentication.
+- Live capture typically requires **root privileges**. Offline pcap analysis (`--read-pcap`) does not. The web dashboard binds to `127.0.0.1` by default. For remote exposure, enable both `[web.tls]` and `[web.auth]` (or `--web-tls*` and `--web-auth*`).
 - IPv6 extension headers are partially supported: common headers are walked to find the effective transport payload and shard routing key.
 - Supported datalink types include Ethernet, Linux SLL, loopback NULL/LOOP, and raw IP. Other datalink types are currently reported as unsupported.
 - IPv4 non-initial fragments are skipped for flow tracking.

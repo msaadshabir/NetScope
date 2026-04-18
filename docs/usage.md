@@ -108,10 +108,20 @@ Start the web dashboard:
 sudo netscope --web
 ```
 
-Open <http://127.0.0.1:8080>. Customize the bind address and port:
+Open <http://127.0.0.1:8080>. If TLS is enabled (`--web-tls` / `[web.tls] enabled = true`), open `https://...` instead.
+
+Customize the bind address and port:
 
 ```bash
 sudo netscope --web --web-bind 0.0.0.0 --web-port 9090
+```
+
+Remote-access baseline (TLS + Basic auth):
+
+```bash
+sudo netscope --web --web-bind 0.0.0.0 --web-port 8443 \
+--web-tls --web-tls-cert /etc/netscope/dashboard.crt --web-tls-key /etc/netscope/dashboard.key \
+--web-auth --web-auth-user netscope --web-auth-pass-file /etc/netscope/dashboard.pass
 ```
 
 Combine with other features:

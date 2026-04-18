@@ -101,14 +101,44 @@ Note: raw-IP pcaps are commonly tagged as link type `101` or `12` depending on t
 
 ## Web Dashboard Not Reachable
 
-**Symptom:** Browser shows "connection refused" at `http://127.0.0.1:8080`.
+**Symptom:** Browser shows "connection refused" at `http://127.0.0.1:8080` (or `https://...` when TLS is enabled).
 
 **Fixes:**
 
 1. Verify `--web` flag is present.
-2. Check the terminal for `Web dashboard: http://...` confirmation.
+2. Check the terminal for `Web dashboard: http://...` or `Web dashboard: https://...` confirmation.
 3. Check for port conflicts: `lsof -i :8080`.
 4. If accessing from another machine, use `--web-bind 0.0.0.0`.
+
+## Web Dashboard TLS Startup Error
+
+**Symptom:** Startup prints an error about TLS cert/key path or fails to start HTTPS listener.
+
+**Fixes:**
+
+1. Ensure `web.tls.cert_path` and `web.tls.key_path` are set when `web.tls.enabled = true`.
+2. Verify both files exist and are readable by the NetScope process.
+3. Ensure certificate/key are PEM-formatted and match each other.
+
+## Web Dashboard Returns 401 Unauthorized
+
+**Symptom:** Browser or API client receives `401 Unauthorized` from dashboard endpoints.
+
+**Causes:**
+
+1. `web.auth.enabled = true` but no/invalid HTTP Basic credentials were provided.
+2. Username/password mismatch between browser/client and NetScope config.
+3. `password_file` content changed without restarting NetScope.
+
+**Fixes:**
+
+1. Verify `web.auth.username` and secret source (`password` or `password_file`) are correct.
+2. If using `password_file`, ensure the file contains only the password (trailing newline is fine).
+3. Retry with explicit credentials in a terminal client for isolation, for example:
+
+```bash
+curl -u netscope:YOUR_PASSWORD https://127.0.0.1:8443/api/health
+```
 
 ## Web Dashboard Shows No Data
 
