@@ -11,15 +11,18 @@
 use axum::{
     Router,
     extract::{
-        State,
+        Request, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{StatusCode, Uri, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
 };
+use axum_server::tls_rustls::RustlsConfig;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rust_embed::Embed;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 use super::messages::{
@@ -55,6 +58,14 @@ pub struct AppState {
     pub packet_store: Mutex<PacketStore>,
     /// Tick interval so we can tell the client in the hello message.
     pub tick_ms: u64,
+    /// Optional HTTP Basic auth credentials.
+    basic_auth: Option<BasicAuthCredentials>,
+}
+
+#[derive(Debug, Clone)]
+struct BasicAuthCredentials {
+    username: String,
+    password: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +79,20 @@ pub struct WebServerConfig {
     pub port: u16,
     pub tick_ms: u64,
     pub packet_buffer: usize,
+    pub tls: Option<WebServerTlsConfig>,
+    pub auth: Option<WebServerAuthConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebServerTlsConfig {
+    pub cert_path: PathBuf,
+    pub key_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct WebServerAuthConfig {
+    pub username: String,
+    pub password: String,
 }
 
 /// Handle returned by `start()` so the capture thread can feed data in.
@@ -80,18 +105,44 @@ pub struct WebHandle {
 ///
 /// Returns a `WebHandle` the caller uses to push capture events.
 pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
+    let WebServerConfig {
+        bind,
+        port,
+        tick_ms,
+        packet_buffer,
+        tls,
+        auth,
+    } = config;
+
+    let rustls_config = if let Some(tls_config) = tls {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(std::io::Error::other)?;
+        Some(rt.block_on(RustlsConfig::from_pem_file(
+            &tls_config.cert_path,
+            &tls_config.key_path,
+        ))?)
+    } else {
+        None
+    };
+
     let (event_tx, event_rx) = mpsc::channel::<CaptureEvent>(4096);
     let (broadcast_tx, _) = broadcast::channel::<BroadcastFrame>(1024);
 
-    let bind_addr = format!("{}:{}", config.bind, config.port);
+    let bind_addr = format!("{}:{}", bind, port);
     let listener = std::net::TcpListener::bind(&bind_addr)?;
     listener.set_nonblocking(true)?;
 
     let state = Arc::new(AppState {
         broadcast_tx: broadcast_tx.clone(),
         latest_frame: Mutex::new(None),
-        packet_store: Mutex::new(PacketStore::new(config.packet_buffer)),
-        tick_ms: config.tick_ms,
+        packet_store: Mutex::new(PacketStore::new(packet_buffer)),
+        tick_ms,
+        basic_auth: auth.map(|auth| BasicAuthCredentials {
+            username: auth.username,
+            password: auth.password,
+        }),
     });
 
     // Spawn a dedicated thread with its own tokio runtime
@@ -115,20 +166,47 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
                     .route("/ws", get(ws_handler))
                     .route("/api/health", get(health_handler))
                     .fallback(get(static_handler))
-                    .with_state(state_clone);
+                    .with_state(state_clone.clone())
+                    .layer(middleware::from_fn_with_state(state_clone, auth_middleware));
 
-                let listener = match tokio::net::TcpListener::from_std(listener) {
-                    Ok(listener) => listener,
-                    Err(err) => {
-                        tracing::error!("failed to start web server on {}: {}", bind_addr, err);
-                        return;
+                if let Some(rustls_config) = rustls_config {
+                    let server = match axum_server::from_tcp_rustls(listener, rustls_config) {
+                        Ok(server) => server,
+                        Err(err) => {
+                            tracing::error!(
+                                "failed to start HTTPS listener on {}: {}",
+                                bind_addr,
+                                err
+                            );
+                            return;
+                        }
+                    };
+
+                    println!("Web dashboard: https://{}", bind_addr);
+                    tracing::info!("web dashboard listening on https://{}", bind_addr);
+
+                    if let Err(err) = server.serve(app.into_make_service()).await {
+                        tracing::error!("web server stopped unexpectedly: {}", err);
                     }
-                };
+                } else {
+                    let server = match axum_server::from_tcp(listener) {
+                        Ok(server) => server,
+                        Err(err) => {
+                            tracing::error!(
+                                "failed to start HTTP listener on {}: {}",
+                                bind_addr,
+                                err
+                            );
+                            return;
+                        }
+                    };
 
-                tracing::info!("web dashboard listening on http://{}", bind_addr);
+                    println!("Web dashboard: http://{}", bind_addr);
+                    tracing::info!("web dashboard listening on http://{}", bind_addr);
 
-                if let Err(err) = axum::serve(listener, app).await {
-                    tracing::error!("web server stopped unexpectedly: {}", err);
+                    if let Err(err) = server.serve(app.into_make_service()).await {
+                        tracing::error!("web server stopped unexpectedly: {}", err);
+                    }
                 }
             });
         })
@@ -213,6 +291,80 @@ async fn health_handler() -> &'static str {
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_ws(socket, state))
+}
+
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(credentials) = &state.basic_auth else {
+        return next.run(request).await;
+    };
+
+    let authorized =
+        is_request_authorized(request.headers().get(header::AUTHORIZATION), credentials);
+    if !authorized {
+        return unauthorized_response();
+    }
+
+    next.run(request).await
+}
+
+fn is_request_authorized(
+    authorization: Option<&axum::http::HeaderValue>,
+    credentials: &BasicAuthCredentials,
+) -> bool {
+    let Some(value) = authorization else {
+        return false;
+    };
+
+    let Ok(raw_header) = value.to_str() else {
+        return false;
+    };
+
+    let Some((scheme, encoded)) = raw_header.split_once(' ') else {
+        return false;
+    };
+    if !scheme.eq_ignore_ascii_case("basic") {
+        return false;
+    }
+
+    let Ok(decoded) = BASE64_STANDARD.decode(encoded.as_bytes()) else {
+        return false;
+    };
+    let Ok(decoded) = std::str::from_utf8(&decoded) else {
+        return false;
+    };
+    let Some((username, password)) = decoded.split_once(':') else {
+        return false;
+    };
+
+    let username_matches = constant_time_eq(username.as_bytes(), credentials.username.as_bytes());
+    let password_matches = constant_time_eq(password.as_bytes(), credentials.password.as_bytes());
+
+    username_matches & password_matches
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    let mut diff = 0u8;
+    for (&l, &r) in left.iter().zip(right.iter()) {
+        diff |= l ^ r;
+    }
+
+    diff == 0
+}
+
+fn unauthorized_response() -> Response {
+    Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(header::WWW_AUTHENTICATE, "Basic realm=\"NetScope\"")
+        .body(axum::body::Body::from("unauthorized"))
+        .unwrap()
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
@@ -389,4 +541,87 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
 
 fn should_serve_spa(path: &str) -> bool {
     path.is_empty() || !path.contains('.')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::util::ServiceExt;
+
+    fn test_state(auth: Option<BasicAuthCredentials>) -> Arc<AppState> {
+        let (broadcast_tx, _) = broadcast::channel::<BroadcastFrame>(16);
+        Arc::new(AppState {
+            broadcast_tx,
+            latest_frame: Mutex::new(None),
+            packet_store: Mutex::new(PacketStore::new(8)),
+            tick_ms: 1000,
+            basic_auth: auth,
+        })
+    }
+
+    fn test_router(auth: Option<BasicAuthCredentials>) -> Router {
+        let state = test_state(auth);
+        Router::new()
+            .route("/api/health", get(health_handler))
+            .with_state(state.clone())
+            .layer(middleware::from_fn_with_state(state, auth_middleware))
+    }
+
+    #[tokio::test]
+    async fn health_without_auth_config_is_public() {
+        let app = test_router(None);
+        let request = Request::builder()
+            .uri("/api/health")
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn health_requires_auth_when_configured() {
+        let app = test_router(Some(BasicAuthCredentials {
+            username: "netscope".into(),
+            password: "secret".into(),
+        }));
+        let request = Request::builder()
+            .uri("/api/health")
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::WWW_AUTHENTICATE)
+                .expect("WWW-Authenticate header should be present"),
+            "Basic realm=\"NetScope\""
+        );
+    }
+
+    #[tokio::test]
+    async fn health_accepts_valid_basic_auth_header() {
+        let app = test_router(Some(BasicAuthCredentials {
+            username: "netscope".into(),
+            password: "secret".into(),
+        }));
+        let token = BASE64_STANDARD.encode("netscope:secret");
+        let request = Request::builder()
+            .uri("/api/health")
+            .header(header::AUTHORIZATION, format!("Basic {}", token))
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
 }

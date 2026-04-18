@@ -45,13 +45,16 @@ num_cpus = "1"
 
 # Web dashboard
 axum = { version = "0.8", features = ["ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors"] }
 rust-embed = { version = "8", features = ["mime-guess"] }
 mime_guess = "2"
+base64 = "0.22"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+tower = { version = "0.5", features = ["util"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(libpcap_1_2_1)', 'cfg(libpcap_1_5_0)', 'cfg(libpcap_1_5_3)', 'cfg(libpcap_1_7_2)', 'cfg(libpcap_1_9_0)', 'cfg(libpcap_1_9_1)'] }

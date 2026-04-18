@@ -195,8 +195,8 @@ fn run_capture(
     };
     let capture_mode = cap.mode();
 
-    // Start web dashboard if enabled
-    let web_handle = start_web_dashboard(config);
+    // Start web dashboard if enabled.
+    let web_handle = start_web_dashboard(config)?;
 
     print_capture_intro(config, capture_mode)?;
     println!("Datalink: {}", link_type);
@@ -263,9 +263,69 @@ fn open_capture_source(
     }
 }
 
-fn start_web_dashboard(config: &RuntimeConfig) -> Option<web::server::WebHandle> {
+fn start_web_dashboard(
+    config: &RuntimeConfig,
+) -> Result<Option<web::server::WebHandle>, Box<dyn std::error::Error>> {
     if !config.web.enabled {
-        return None;
+        return Ok(None);
+    }
+
+    config.web.validate().map_err(|err| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid web dashboard config: {}", err),
+        )
+    })?;
+
+    let tls = if config.web.tls.enabled {
+        Some(web::server::WebServerTlsConfig {
+            cert_path: config
+                .web
+                .tls
+                .cert_path
+                .clone()
+                .expect("web tls cert_path validated"),
+            key_path: config
+                .web
+                .tls
+                .key_path
+                .clone()
+                .expect("web tls key_path validated"),
+        })
+    } else {
+        None
+    };
+
+    let auth = if config.web.auth.enabled {
+        let password = config
+            .web
+            .auth
+            .resolve_password()
+            .map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("invalid web dashboard config: {}", err),
+                )
+            })?
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid web dashboard config: web auth enabled but no password resolved",
+                )
+            })?;
+
+        Some(web::server::WebServerAuthConfig {
+            username: config.web.auth.username.clone(),
+            password,
+        })
+    } else {
+        None
+    };
+
+    if auth.is_some() && tls.is_none() {
+        eprintln!(
+            "warning: web auth is enabled without TLS; credentials will be sent in cleartext"
+        );
     }
 
     let server_config = web::server::WebServerConfig {
@@ -273,20 +333,13 @@ fn start_web_dashboard(config: &RuntimeConfig) -> Option<web::server::WebHandle>
         port: config.web.port,
         tick_ms: config.web.tick_ms,
         packet_buffer: config.web.packet_buffer,
+        tls,
+        auth,
     };
-    match web::server::start(server_config) {
-        Ok(handle) => {
-            println!(
-                "Web dashboard: http://{}:{}",
-                config.web.bind, config.web.port
-            );
-            Some(handle)
-        }
-        Err(err) => {
-            eprintln!("error starting web dashboard: {}", err);
-            None
-        }
-    }
+    let handle = web::server::start(server_config)
+        .map_err(|err| std::io::Error::other(format!("error starting web dashboard: {}", err)))?;
+
+    Ok(Some(handle))
 }
 
 fn print_capture_intro(
@@ -1150,6 +1203,43 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
     }
     if let Some(value) = args.web_port {
         web.port = value;
+    }
+    if args.web_tls {
+        web.tls.enabled = true;
+    }
+    if args.no_web_tls {
+        web.tls.enabled = false;
+    }
+    if let Some(value) = &args.web_tls_cert {
+        if value.as_os_str().is_empty() {
+            web.tls.cert_path = None;
+        } else {
+            web.tls.cert_path = Some(value.clone());
+        }
+    }
+    if let Some(value) = &args.web_tls_key {
+        if value.as_os_str().is_empty() {
+            web.tls.key_path = None;
+        } else {
+            web.tls.key_path = Some(value.clone());
+        }
+    }
+    if args.web_auth {
+        web.auth.enabled = true;
+    }
+    if args.no_web_auth {
+        web.auth.enabled = false;
+    }
+    if let Some(value) = &args.web_auth_user {
+        web.auth.username = value.clone();
+    }
+    if let Some(value) = &args.web_auth_pass_file {
+        if value.as_os_str().is_empty() {
+            web.auth.password_file = None;
+        } else {
+            web.auth.password_file = Some(value.clone());
+            web.auth.password = None;
+        }
     }
     web.normalize();
 

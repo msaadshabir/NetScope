@@ -137,6 +137,38 @@ pub struct Cli {
     #[arg(long)]
     pub web_port: Option<u16>,
 
+    /// Enable HTTPS for the web dashboard
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_web_tls")]
+    pub web_tls: bool,
+
+    /// Disable HTTPS for the web dashboard
+    #[arg(long = "no-web-tls", action = clap::ArgAction::SetTrue, conflicts_with = "web_tls")]
+    pub no_web_tls: bool,
+
+    /// PEM certificate file path for web dashboard HTTPS
+    #[arg(long)]
+    pub web_tls_cert: Option<std::path::PathBuf>,
+
+    /// PEM private key file path for web dashboard HTTPS
+    #[arg(long)]
+    pub web_tls_key: Option<std::path::PathBuf>,
+
+    /// Enable HTTP Basic auth for the web dashboard
+    #[arg(long, action = clap::ArgAction::SetTrue, conflicts_with = "no_web_auth")]
+    pub web_auth: bool,
+
+    /// Disable HTTP Basic auth for the web dashboard
+    #[arg(long = "no-web-auth", action = clap::ArgAction::SetTrue, conflicts_with = "web_auth")]
+    pub no_web_auth: bool,
+
+    /// Username for web dashboard HTTP Basic auth
+    #[arg(long)]
+    pub web_auth_user: Option<String>,
+
+    /// File containing the web dashboard HTTP Basic auth password
+    #[arg(long)]
+    pub web_auth_pass_file: Option<std::path::PathBuf>,
+
     /// Enable the sharded pipeline for multi-core packet processing
     #[arg(long)]
     pub pipeline: bool,
