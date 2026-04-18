@@ -29,14 +29,14 @@ The CLI exposes common capture, output, and mode toggles, but some tuning knobs 
 
 - `capture.buffer_size_mb` and `capture.immediate_mode`
 - `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order`
-- `web.tick_ms`, `web.top_n`, `web.packet_buffer`, `web.sample_rate`, and `web.payload_bytes`
+- `web.tick_ms`, `web.top_n`, `web.packet_buffer`, `web.sample_rate`, `web.payload_bytes`, `web.tls.*`, and `web.auth.*`
 - `pipeline.channel_capacity`
 
 Use [CLI Reference](cli-reference.md) for flag-level help and this page for the full config schema.
 
 ## Path Fields
 
-In TOML, path fields (`capture.read_pcap`, `write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `alerts_jsonl`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
+In TOML, path fields (`capture.read_pcap`, `write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `alerts_jsonl`, `web.tls.cert_path`, `web.tls.key_path`, `web.auth.password_file`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
 
 ```toml
 [output]
@@ -49,41 +49,41 @@ expired_flows_jsonl = "" # disabled
 
 ### `[capture]`
 
-| Key           | Type   | Default | Description                                                      |
-| ------------- | ------ | ------- | ---------------------------------------------------------------- |
-| `interface`   | string | (auto)  | Network interface name (e.g., `"en0"`). Omit for system default. |
-| `read_pcap`   | path   | (none)  | Read packets from an offline pcap file instead of a live interface. Mutually exclusive with `interface`. |
-| `promiscuous` | bool   | `true`  | Capture in promiscuous mode.                                     |
-| `snaplen`     | int    | `65535` | Maximum bytes captured per packet.                               |
-| `timeout_ms`  | int    | `100`   | Capture read timeout in milliseconds.                            |
-| `buffer_size_mb` | int | (none)  | libpcap capture buffer size in megabytes. Omit the key (or set to 0) to use the libpcap default. |
-| `immediate_mode` | bool | `false` | Enable libpcap immediate mode (if supported by your libpcap build). |
-| `filter`      | string | (none)  | BPF filter expression.                                           |
+| Key              | Type   | Default | Description                                                                                              |
+| ---------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------- |
+| `interface`      | string | (auto)  | Network interface name (e.g., `"en0"`). Omit for system default.                                         |
+| `read_pcap`      | path   | (none)  | Read packets from an offline pcap file instead of a live interface. Mutually exclusive with `interface`. |
+| `promiscuous`    | bool   | `true`  | Capture in promiscuous mode.                                                                             |
+| `snaplen`        | int    | `65535` | Maximum bytes captured per packet.                                                                       |
+| `timeout_ms`     | int    | `100`   | Capture read timeout in milliseconds.                                                                    |
+| `buffer_size_mb` | int    | (none)  | libpcap capture buffer size in megabytes. Omit the key (or set to 0) to use the libpcap default.         |
+| `immediate_mode` | bool   | `false` | Enable libpcap immediate mode (if supported by your libpcap build).                                      |
+| `filter`         | string | (none)  | BPF filter expression.                                                                                   |
 
 Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If both are set, NetScope exits with a configuration error. If neither is set, NetScope captures from the system default interface. When `capture.read_pcap` is set, live-capture-only settings like `promiscuous`, `timeout_ms`, `buffer_size_mb`, and `immediate_mode` have no effect.
 
 ### `[run]`
 
-| Key     | Type | Default | Description                                |
-| ------- | ---- | ------- | ------------------------------------------ |
+| Key     | Type | Default | Description                                                             |
+| ------- | ---- | ------- | ----------------------------------------------------------------------- |
 | `count` | int  | `0`     | Maximum packets to process. 0 = unlimited (live: Ctrl-C; offline: EOF). |
 
 ### `[output]`
 
-| Key           | Type | Default | Description                            |
-| ------------- | ---- | ------- | -------------------------------------- |
-| `write_pcap`  | path | (none)  | Write captured packets to a pcap file. |
-| `export_json` | path | (none)  | Export flow table to JSON on exit.     |
-| `export_csv`  | path | (none)  | Export flow table to CSV on exit.      |
+| Key                   | Type | Default | Description                                                  |
+| --------------------- | ---- | ------- | ------------------------------------------------------------ |
+| `write_pcap`          | path | (none)  | Write captured packets to a pcap file.                       |
+| `export_json`         | path | (none)  | Export flow table to JSON on exit.                           |
+| `export_csv`          | path | (none)  | Export flow table to CSV on exit.                            |
 | `expired_flows_jsonl` | path | (none)  | Write expired or evicted flows as JSON lines during capture. |
-| `hex_dump`    | bool | `false` | Show hex dump of each packet.          |
-| `quiet`       | bool | `false` | Suppress per-packet terminal output.   |
+| `hex_dump`            | bool | `false` | Show hex dump of each packet.                                |
+| `quiet`               | bool | `false` | Suppress per-packet terminal output.                         |
 
 ### `[flow]`
 
-| Key            | Type  | Default  | Description                                                                    |
-| -------------- | ----- | -------- | ------------------------------------------------------------------------------ |
-| `timeout_secs` | float | `60.0`   | Flow inactivity timeout in seconds. 0 = never expire.                          |
+| Key            | Type  | Default  | Description                                                                                                                                           |
+| -------------- | ----- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout_secs` | float | `60.0`   | Flow inactivity timeout in seconds. 0 = never expire.                                                                                                 |
 | `max_flows`    | int   | `100000` | Maximum tracked flows. When exceeded, oldest flows are evicted. 0 = unlimited. Used to pre-size the flow table at startup (memory reserved up front). |
 
 ### `[stats]`
@@ -96,11 +96,11 @@ Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If bot
 
 ### `[analysis]`
 
-| Key            | Type | Default | Description                                      |
-| -------------- | ---- | ------- | ------------------------------------------------ |
-| `rtt`          | bool | `true`  | Compute TCP RTT estimates.                       |
-| `retrans`      | bool | `true`  | Detect TCP retransmissions.                      |
-| `out_of_order` | bool | `true`  | Detect out-of-order TCP segments.                |
+| Key            | Type | Default | Description                                                                  |
+| -------------- | ---- | ------- | ---------------------------------------------------------------------------- |
+| `rtt`          | bool | `true`  | Compute TCP RTT estimates.                                                   |
+| `retrans`      | bool | `true`  | Detect TCP retransmissions.                                                  |
+| `out_of_order` | bool | `true`  | Detect out-of-order TCP segments.                                            |
 | `alerts_jsonl` | path | (none)  | Write anomaly alerts as JSON lines to this file (inline and pipeline modes). |
 
 When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `false`, NetScope automatically switches flow tracking to its compact scale-mode storage path to reduce per-flow memory usage.
@@ -147,6 +147,32 @@ When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all `fa
 These keys apply only when `web.enabled = true`. Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. Packet detail storage is keyed by packet id, so lookups remain stable even if pipeline events arrive slightly out of order.
 
 Note: `payload_bytes` limits how many bytes are stored for the web packet detail hex dump (see `build_packet_data` in `src/lib.rs`). It does not change capture `snaplen` or what is written to pcap.
+
+### `[web.tls]`
+
+| Key         | Type | Default | Description                                                   |
+| ----------- | ---- | ------- | ------------------------------------------------------------- |
+| `enabled`   | bool | `false` | Enable HTTPS for the web dashboard.                           |
+| `cert_path` | path | (none)  | PEM certificate path. Required when `web.tls.enabled = true`. |
+| `key_path`  | path | (none)  | PEM private key path. Required when `web.tls.enabled = true`. |
+
+When enabled, NetScope serves the dashboard over HTTPS and expects certificate/key files to be readable at startup.
+
+### `[web.auth]`
+
+| Key             | Type   | Default | Description                                                              |
+| --------------- | ------ | ------- | ------------------------------------------------------------------------ |
+| `enabled`       | bool   | `false` | Enable HTTP Basic auth for all dashboard routes (including `/ws`).       |
+| `username`      | string | `""`    | HTTP Basic auth username. Required when `web.auth.enabled = true`.       |
+| `password`      | string | (none)  | Inline password value. Use either this key or `password_file`, not both. |
+| `password_file` | path   | (none)  | File containing the password value. Use either this key or `password`.   |
+
+Validation rules when `web.auth.enabled = true`:
+
+- `username` must be non-empty.
+- Exactly one secret source must be configured: `password` or `password_file`.
+
+For safer operations, prefer `password_file` over inline `password` so credentials are not stored directly in shared config templates.
 
 ### `[pipeline]`
 

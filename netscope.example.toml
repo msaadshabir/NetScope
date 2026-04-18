@@ -68,6 +68,17 @@ packet_buffer = 2000   # packet-store preallocation is internally capped at 8192
 sample_rate = 1
 payload_bytes = 256
 
+[web.tls]
+enabled = false
+cert_path = ""  # PEM certificate path (required when enabled)
+key_path = ""   # PEM private key path (required when enabled)
+
+[web.auth]
+enabled = false
+username = ""
+password = ""      # optional inline password (use either this or password_file)
+password_file = "" # optional file containing only the password
+
 [pipeline]
 enabled = false
 workers = 0          # 0 = auto-detect (half of CPU count, clamped 1..8)

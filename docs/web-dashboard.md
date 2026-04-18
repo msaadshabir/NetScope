@@ -8,6 +8,8 @@ sudo netscope --web --quiet
 
 Then open <http://127.0.0.1:8080>.
 
+If TLS is enabled (`[web.tls] enabled = true`), use `https://...` instead.
+
 ## Features
 
 - **Stats cards** -- live throughput (Mbps), packet rate (pps), active flow count, alert count, and kernel drop totals.
@@ -29,6 +31,8 @@ TLS ClientHello SNI detection is best-effort and packet-level (no TCP reassembly
 | `/`           | GET    | Serves the dashboard HTML (embedded in the binary via `rust-embed`). |
 | `/ws`         | GET    | WebSocket endpoint for real-time data.                               |
 | `/api/health` | GET    | Health check, returns `200 OK`.                                      |
+
+When dashboard auth is enabled (`[web.auth] enabled = true`), all endpoints above require HTTP Basic auth, including `/api/health` and the WebSocket handshake.
 
 The dashboard HTML/CSS/JS is embedded into the binary at compile time (no separate frontend build step). Chart.js is vendored under `web/static/vendor/chartjs/` and served locally, so charts render in airgapped/offline environments. The bundle is served at `/vendor/chartjs/chart.umd.min.js`.
 
@@ -113,6 +117,8 @@ Clients dedupe merged frames by `frame_seq` so reconnect / lag recovery does not
 
 These can be set in the `[web]` section of the config file. `--web-bind` and `--web-port` are available as CLI flags; the other keys require a config file.
 
+TLS and auth live under `[web.tls]` / `[web.auth]` and can be configured through the config file or via the `--web-tls*` / `--web-auth*` CLI flags (see [CLI Reference](cli-reference.md)).
+
 Packet sampling uses the capture-wide packet id, so `sample_rate` is global in both inline and pipeline modes. Packet detail storage is keyed by packet id and remains robust even when events arrive slightly out of order across worker shards. For authoritative defaults, see [Configuration](configuration.md).
 
 Note: the dashboard stores at most `payload_bytes` per packet for the hex dump in packet detail. This does not affect capture `snaplen` or pcap writing.
@@ -130,4 +136,31 @@ In pipeline mode, workers use a fixed-size streaming heavy-hitters tracker to pi
 
 ## Security
 
-The web server binds to `127.0.0.1` by default. Since NetScope typically runs as root, exposing the dashboard to the network (`--web-bind 0.0.0.0`) should be done with care -- it serves real-time traffic data with no authentication.
+The web server binds to `127.0.0.1` by default. Since NetScope typically runs as root, exposing the dashboard to the network (`--web-bind 0.0.0.0`) should be done with care.
+
+NetScope now supports optional HTTPS (`[web.tls]`) and optional HTTP Basic auth (`[web.auth]`) for the dashboard.
+
+Recommended remote-access baseline:
+
+```toml
+[web]
+enabled = true
+bind = "0.0.0.0"
+port = 8443
+
+[web.tls]
+enabled = true
+cert_path = "/etc/netscope/dashboard.crt"
+key_path = "/etc/netscope/dashboard.key"
+
+[web.auth]
+enabled = true
+username = "netscope"
+password_file = "/etc/netscope/dashboard.pass"
+```
+
+Notes:
+
+- If auth is enabled without TLS, credentials are sent over cleartext HTTP Basic auth. Use TLS for non-localhost deployments.
+- Self-signed certificates are supported; browsers may show an initial certificate warning.
+- Auth applies to static pages, `/api/health`, and `/ws`.
