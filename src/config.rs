@@ -256,7 +256,7 @@ pub struct WebConfig {
     pub auth: WebAuthConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WebTlsConfig {
     /// Enable HTTPS for the dashboard.
@@ -269,17 +269,7 @@ pub struct WebTlsConfig {
     pub key_path: Option<PathBuf>,
 }
 
-impl Default for WebTlsConfig {
-    fn default() -> Self {
-        WebTlsConfig {
-            enabled: false,
-            cert_path: None,
-            key_path: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WebAuthConfig {
     /// Enable HTTP Basic authentication for all dashboard endpoints.
@@ -291,17 +281,6 @@ pub struct WebAuthConfig {
     /// File containing the HTTP Basic auth password.
     #[serde(deserialize_with = "empty_path_none")]
     pub password_file: Option<PathBuf>,
-}
-
-impl Default for WebAuthConfig {
-    fn default() -> Self {
-        WebAuthConfig {
-            enabled: false,
-            username: String::new(),
-            password: None,
-            password_file: None,
-        }
-    }
 }
 
 impl Default for WebConfig {
