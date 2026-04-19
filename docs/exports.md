@@ -12,6 +12,14 @@ sudo netscope --write-pcap capture.pcap
 
 The file uses standard pcap format and can be opened with Wireshark, tcpdump, or any pcap-compatible tool. In pipeline mode, pcap writing happens on the capture thread before dispatch, so all packets are written regardless of dispatch drops.
 
+Enable size-based rotation to prevent unbounded pcap growth:
+
+```bash
+sudo netscope --write-pcap capture.pcap --write-pcap-rotate-mb 256 --write-pcap-max-files 8
+```
+
+With rotation enabled, `--write-pcap` is treated as a base template and NetScope writes numbered segments like `capture.000001.pcap`, `capture.000002.pcap`, and so on (the unsuffixed `capture.pcap` file is not created). Once the max-files limit is reached, the oldest segment is deleted when a new one is created.
+
 You can also use `--read-pcap` with `--write-pcap` to produce a filtered or trimmed pcap (no sudo required):
 
 ```bash

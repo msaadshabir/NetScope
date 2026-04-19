@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - `--read-pcap <PATH>` and `capture.read_pcap` to analyze offline pcaps (supports BPF filters and can be paired with `--write-pcap` to rewrite pcaps).
+- Size-based rotation with bounded retention for pcap output (`--write-pcap`) via `--write-pcap-rotate-mb` / `--write-pcap-max-files` (and matching `[output]` config keys).
 - `--expired-flows-jsonl <PATH>` to continuously write expired/evicted flow records as JSONL during capture (includes `reason = timeout | eviction`).
 - Live kernel/libpcap drop and interface drop deltas/totals in periodic stats ticks and the web dashboard.
 - DNS (UDP/53) decoding in CLI packet views and the web packet inspector.

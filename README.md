@@ -13,7 +13,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
 - **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames (Chart.js served locally for offline/airgapped use)
 - **Live drop metrics** -- periodic kernel/libpcap drop and interface drop deltas/totals (CLI + dashboard)
-- **Export** -- flows to JSON/CSV, alerts to JSONL (inline and pipeline modes), expired/evicted flows to JSONL, packets to pcap
+- **Export** -- flows to JSON/CSV, alerts to JSONL (inline and pipeline modes), expired/evicted flows to JSONL, packets to pcap (optional size-based rotation via `--write-pcap-rotate-mb` / `--write-pcap-max-files`)
 - **TOML configuration** with full CLI override support
 
 ## Quickstart

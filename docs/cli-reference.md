@@ -28,17 +28,21 @@ libpcap buffer sizing and immediate mode are configured through the `[capture]` 
 
 ## Output Options
 
-| Flag                           | Short | Type  | Default | Description                                                                  |
-| ------------------------------ | ----- | ----- | ------- | ---------------------------------------------------------------------------- |
-| `--hex-dump`                   |       | flag  | off     | Show detailed per-packet output with a hex-dump preview.                     |
-| `--no-hex-dump`                |       | flag  |         | Disable hex dump output.                                                     |
-| `--quiet`                      |       | flag  | off     | Suppress per-packet terminal output. Useful for stats-only or web-only runs. |
-| `--no-quiet`                   |       | flag  |         | Re-enable per-packet output (overrides config file).                         |
-| `--verbose`                    | `-v`  | count | 0       | Increase verbosity. `-v` = INFO, `-vv` = DEBUG, `-vvv` = TRACE.              |
-| `--write-pcap <PATH>`          |       | path  | (none)  | Write captured packets to a pcap file.                                       |
-| `--export-json <PATH>`         |       | path  | (none)  | Export the flow table to JSON on exit.                                       |
-| `--export-csv <PATH>`          |       | path  | (none)  | Export the flow table to CSV on exit.                                        |
-| `--expired-flows-jsonl <PATH>` |       | path  | (none)  | Write expired/evicted flow records as JSON lines.                            |
+| Flag                           | Short | Type  | Default | Description                                                                                                         |
+| ------------------------------ | ----- | ----- | ------- | ------------------------------------------------------------------------------------------------------------------- |
+| `--hex-dump`                   |       | flag  | off     | Show detailed per-packet output with a hex-dump preview.                                                            |
+| `--no-hex-dump`                |       | flag  |         | Disable hex dump output.                                                                                            |
+| `--quiet`                      |       | flag  | off     | Suppress per-packet terminal output. Useful for stats-only or web-only runs.                                        |
+| `--no-quiet`                   |       | flag  |         | Re-enable per-packet output (overrides config file).                                                                |
+| `--verbose`                    | `-v`  | count | 0       | Increase verbosity. `-v` = INFO, `-vv` = DEBUG, `-vvv` = TRACE.                                                     |
+| `--write-pcap <PATH>`          |       | path  | (none)  | Write captured packets to a pcap file.                                                                              |
+| `--write-pcap-rotate-mb <MB>`  |       | int   | 0       | Rotate pcap output when a segment reaches this many MiB. Requires `--write-pcap` + `--write-pcap-max-files`.        |
+| `--write-pcap-max-files <N>`   |       | int   | 0       | Keep only the newest `N` rotated pcap segments (delete oldest). Requires `--write-pcap` + `--write-pcap-rotate-mb`. |
+| `--export-json <PATH>`         |       | path  | (none)  | Export the flow table to JSON on exit.                                                                              |
+| `--export-csv <PATH>`          |       | path  | (none)  | Export the flow table to CSV on exit.                                                                               |
+| `--expired-flows-jsonl <PATH>` |       | path  | (none)  | Write expired/evicted flow records as JSON lines.                                                                   |
+
+When rotation is enabled, `--write-pcap` is treated as a base template and NetScope writes numbered segments like `capture.000001.pcap`, `capture.000002.pcap`, and so on (the unsuffixed `capture.pcap` file is not created).
 
 Note: verbosity level `-vv` or higher also enables detailed per-packet output even if `--hex-dump` is not set.
 

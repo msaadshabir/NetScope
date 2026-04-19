@@ -97,7 +97,8 @@ Note: raw-IP pcaps are commonly tagged as link type `101` or `12` depending on t
 1. Ensure the output path exists and is writable.
 2. Verify there is enough free disk space (`df -h`).
 3. Capture to a faster or local filesystem.
-4. Disable `--write-pcap` if raw packet archiving is not required.
+4. Enable bounded rotation for long captures: `--write-pcap-rotate-mb <MB> --write-pcap-max-files <N>` (writes numbered segments and deletes the oldest when the limit is reached).
+5. Disable `--write-pcap` if raw packet archiving is not required.
 
 ## Web Dashboard Not Reachable
 

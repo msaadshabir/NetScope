@@ -70,14 +70,20 @@ Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If bot
 
 ### `[output]`
 
-| Key                   | Type | Default | Description                                                  |
-| --------------------- | ---- | ------- | ------------------------------------------------------------ |
-| `write_pcap`          | path | (none)  | Write captured packets to a pcap file.                       |
-| `export_json`         | path | (none)  | Export flow table to JSON on exit.                           |
-| `export_csv`          | path | (none)  | Export flow table to CSV on exit.                            |
-| `expired_flows_jsonl` | path | (none)  | Write expired or evicted flows as JSON lines during capture. |
-| `hex_dump`            | bool | `false` | Show hex dump of each packet.                                |
-| `quiet`               | bool | `false` | Suppress per-packet terminal output.                         |
+| Key                    | Type | Default | Description                                                                                          |
+| ---------------------- | ---- | ------- | ---------------------------------------------------------------------------------------------------- |
+| `write_pcap`           | path | (none)  | Write captured packets to a pcap file.                                                               |
+| `write_pcap_rotate_mb` | int  | `0`     | Rotate pcap output when the active segment reaches this many MiB. `0` disables rotation.             |
+| `write_pcap_max_files` | int  | `0`     | Keep only the newest `N` rotated pcap files (delete oldest). Must be `> 0` when rotation is enabled. |
+| `export_json`          | path | (none)  | Export flow table to JSON on exit.                                                                   |
+| `export_csv`           | path | (none)  | Export flow table to CSV on exit.                                                                    |
+| `expired_flows_jsonl`  | path | (none)  | Write expired or evicted flows as JSON lines during capture.                                         |
+| `hex_dump`             | bool | `false` | Show hex dump of each packet.                                                                        |
+| `quiet`                | bool | `false` | Suppress per-packet terminal output.                                                                 |
+
+When rotation is enabled (`write_pcap_rotate_mb > 0` and `write_pcap_max_files > 0`), NetScope treats `write_pcap` as a base template and writes numbered segments such as `capture.000001.pcap`, `capture.000002.pcap`, and so on (the unsuffixed `capture.pcap` file is not created).
+
+If either `write_pcap_rotate_mb` or `write_pcap_max_files` is set without the other, NetScope exits with a configuration error.
 
 ### `[flow]`
 

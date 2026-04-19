@@ -125,3 +125,5 @@ Pipeline mode does not support per-packet terminal output (`--quiet` is effectiv
 ### Pcap writing
 
 Pcap file writing (`--write-pcap`) still happens on the capture thread before dispatch, so all packets are written regardless of dispatch drops. NetScope now flushes pcap output periodically and on shutdown; if a flush fails (for example, disk full), capture exits with an error instead of silently continuing.
+
+For long-running captures, enable bounded rotation with `--write-pcap-rotate-mb <MB>` and `--write-pcap-max-files <N>` to prevent unbounded disk growth. Rotated output is written as numbered segments like `capture.000001.pcap` (the unsuffixed base file is not created); see [Exports](exports.md) for details.

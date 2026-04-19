@@ -82,6 +82,14 @@ Write packets to pcap and export the flow table on exit:
 sudo netscope --write-pcap capture.pcap --export-json flows.json --export-csv flows.csv
 ```
 
+Keep pcap output bounded for long-running captures:
+
+```bash
+sudo netscope --write-pcap capture.pcap --write-pcap-rotate-mb 256 --write-pcap-max-files 8 --quiet
+```
+
+With rotation enabled, `--write-pcap` is treated as a base template and NetScope writes numbered segments like `capture.000001.pcap`, `capture.000002.pcap`, and so on (the unsuffixed `capture.pcap` file is not created).
+
 See [Exports](exports.md) for format details and sample outputs.
 
 ## Anomaly Detection
