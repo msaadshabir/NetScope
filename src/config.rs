@@ -109,6 +109,8 @@ pub struct RunConfig {
 pub struct OutputConfig {
     #[serde(deserialize_with = "empty_path_none")]
     pub write_pcap: Option<PathBuf>,
+    pub write_pcap_rotate_mb: u64,
+    pub write_pcap_max_files: usize,
     #[serde(deserialize_with = "empty_path_none")]
     pub export_json: Option<PathBuf>,
     #[serde(deserialize_with = "empty_path_none")]

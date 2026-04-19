@@ -73,6 +73,14 @@ pub struct Cli {
     #[arg(long)]
     pub write_pcap: Option<std::path::PathBuf>,
 
+    /// Rotate --write-pcap output when a file reaches this many MiB
+    #[arg(long, value_name = "MB", requires = "write_pcap")]
+    pub write_pcap_rotate_mb: Option<u64>,
+
+    /// Maximum number of rotated pcap files to keep
+    #[arg(long, value_name = "N", requires = "write_pcap")]
+    pub write_pcap_max_files: Option<usize>,
+
     /// Export flow table to JSON on exit
     #[arg(long)]
     pub export_json: Option<std::path::PathBuf>,

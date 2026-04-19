@@ -4,6 +4,9 @@ use netscope::{analysis, capture, config, display, flow, memory, pipeline, proto
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
+use std::collections::VecDeque;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -189,8 +192,9 @@ fn run_capture(
     validate_capture_config(config)?;
     let mut cap = open_capture_source(config)?;
     let link_type = protocol::LinkType::from_pcap_value(cap.get_datalink().0);
+    let rotation_policy = PcapRotationPolicy::from_output(&config.output);
     let mut savefile = match &config.output.write_pcap {
-        Some(path) => Some(cap.savefile(path)?),
+        Some(path) => Some(RotatingSavefile::open(&mut cap, path.as_path(), rotation_policy)?),
         None => None,
     };
     let capture_mode = cap.mode();
@@ -236,6 +240,27 @@ fn validate_capture_config(config: &RuntimeConfig) -> Result<(), Box<dyn std::er
         )
         .into());
     }
+
+    let rotate_mb = config.output.write_pcap_rotate_mb;
+    let max_files = config.output.write_pcap_max_files;
+    let rotation_requested = rotate_mb > 0 || max_files > 0;
+    if rotation_requested {
+        if config.output.write_pcap.is_none() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "configuration error: output.write_pcap must be set when pcap rotation is enabled",
+            )
+            .into());
+        }
+        if rotate_mb == 0 || max_files == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "configuration error: output.write_pcap_rotate_mb and output.write_pcap_max_files must both be > 0 when rotation is enabled",
+            )
+            .into());
+        }
+    }
+
     Ok(())
 }
 
@@ -397,22 +422,234 @@ fn print_kernel_capture_stats(cap: &mut CaptureSource) {
 
 const SAVEFILE_FLUSH_INTERVAL_PACKETS: u64 = 1024;
 const LIVE_PCAP_STATS_POLL_INTERVAL_MS: u64 = 250;
+const SAVEFILE_GLOBAL_HEADER_BYTES: u64 = 24;
+const SAVEFILE_PACKET_RECORD_BYTES: u64 = 16;
+
+#[derive(Debug, Clone, Copy)]
+struct PcapRotationPolicy {
+    max_bytes: u64,
+    max_files: usize,
+}
+
+impl PcapRotationPolicy {
+    fn from_output(output: &config::OutputConfig) -> Option<Self> {
+        if output.write_pcap_rotate_mb == 0 && output.write_pcap_max_files == 0 {
+            return None;
+        }
+        Some(PcapRotationPolicy {
+            max_bytes: output.write_pcap_rotate_mb.saturating_mul(1024 * 1024),
+            max_files: output.write_pcap_max_files,
+        })
+    }
+}
+
+struct RotatingSavefile {
+    base_path: PathBuf,
+    rotation: Option<PcapRotationPolicy>,
+    current_segment: u64,
+    current_bytes: u64,
+    rotate_pending: bool,
+    segment_paths: VecDeque<PathBuf>,
+    savefile: pcap::Savefile,
+}
+
+impl RotatingSavefile {
+    fn open(
+        cap: &mut CaptureSource,
+        base_path: &Path,
+        rotation: Option<PcapRotationPolicy>,
+    ) -> Result<Self, pcap::Error> {
+        if let Some(rotation) = rotation {
+            let existing_segments = Self::collect_existing_segments(base_path);
+            let first_segment = existing_segments
+                .last()
+                .map(|(segment, _)| segment.saturating_add(1))
+                .unwrap_or(1);
+            let path = Self::segment_path(base_path, first_segment);
+            let savefile = cap.savefile(&path)?;
+            let mut segment_paths: VecDeque<PathBuf> = existing_segments
+                .into_iter()
+                .map(|(_, path)| path)
+                .collect();
+            segment_paths.push_back(path);
+
+            let mut writer = Self {
+                base_path: base_path.to_path_buf(),
+                rotation: Some(rotation),
+                current_segment: first_segment,
+                current_bytes: SAVEFILE_GLOBAL_HEADER_BYTES,
+                rotate_pending: false,
+                segment_paths,
+                savefile,
+            };
+            writer.prune_old_segments(rotation.max_files);
+            Ok(writer)
+        } else {
+            let savefile = cap.savefile(base_path)?;
+            Ok(Self {
+                base_path: base_path.to_path_buf(),
+                rotation,
+                current_segment: 0,
+                current_bytes: 0,
+                rotate_pending: false,
+                segment_paths: VecDeque::new(),
+                savefile,
+            })
+        }
+    }
+
+    fn write_packet(
+        &mut self,
+        packet: &pcap::Packet<'_>,
+        packet_count: u64,
+    ) -> Result<(), pcap::Error> {
+        self.savefile.write(packet);
+        if packet_count.is_multiple_of(SAVEFILE_FLUSH_INTERVAL_PACKETS) {
+            self.savefile.flush()?;
+        }
+
+        if let Some(rotation) = self.rotation {
+            self.current_bytes = self.current_bytes.saturating_add(
+                SAVEFILE_PACKET_RECORD_BYTES.saturating_add(packet.data.len() as u64),
+            );
+            if self.current_bytes >= rotation.max_bytes {
+                self.rotate_pending = true;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn rotate_if_needed(&mut self, cap: &mut CaptureSource) -> Result<(), pcap::Error> {
+        let Some(rotation) = self.rotation else {
+            return Ok(());
+        };
+        if !self.rotate_pending {
+            return Ok(());
+        }
+
+        self.savefile.flush()?;
+        self.current_segment = self.current_segment.saturating_add(1);
+        let next_path = Self::segment_path(&self.base_path, self.current_segment);
+        self.savefile = cap.savefile(&next_path)?;
+        self.current_bytes = SAVEFILE_GLOBAL_HEADER_BYTES;
+        self.rotate_pending = false;
+        self.segment_paths.push_back(next_path);
+        self.prune_old_segments(rotation.max_files);
+
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<(), pcap::Error> {
+        self.savefile.flush()
+    }
+
+    fn segment_path(base_path: &Path, segment: u64) -> PathBuf {
+        let parent = base_path.parent().unwrap_or_else(|| Path::new(""));
+        let stem = base_path
+            .file_stem()
+            .or_else(|| base_path.file_name())
+            .unwrap_or_else(|| OsStr::new("capture"));
+
+        let mut filename = OsString::from(stem);
+        filename.push(format!(".{:06}", segment));
+        if let Some(ext) = base_path.extension() {
+            filename.push(".");
+            filename.push(ext);
+        }
+
+        parent.join(filename)
+    }
+
+    fn collect_existing_segments(base_path: &Path) -> Vec<(u64, PathBuf)> {
+        let parent = base_path.parent().unwrap_or_else(|| Path::new("."));
+        let mut segments = Vec::new();
+
+        let entries = match std::fs::read_dir(parent) {
+            Ok(entries) => entries,
+            Err(err) => {
+                tracing::debug!(
+                    path = %parent.display(),
+                    error = %err,
+                    "failed to read pcap rotation directory"
+                );
+                return segments;
+            }
+        };
+
+        for entry in entries.flatten() {
+            if !entry.file_type().is_ok_and(|file_type| file_type.is_file()) {
+                continue;
+            }
+
+            let path = entry.path();
+            if let Some(segment) = Self::parse_segment_index(base_path, &path) {
+                segments.push((segment, path));
+            }
+        }
+
+        segments.sort_unstable_by_key(|(segment, _)| *segment);
+        segments
+    }
+
+    fn parse_segment_index(base_path: &Path, path: &Path) -> Option<u64> {
+        let file_name = path.file_name()?.to_string_lossy();
+        let stem = base_path
+            .file_stem()
+            .or_else(|| base_path.file_name())
+            .unwrap_or_else(|| OsStr::new("capture"))
+            .to_string_lossy();
+
+        let with_stem_prefix = format!("{}.", stem);
+
+        let index_str = if let Some(ext) = base_path.extension() {
+            let ext_suffix = format!(".{}", ext.to_string_lossy());
+            let without_ext = file_name.strip_suffix(&ext_suffix)?;
+            without_ext.strip_prefix(&with_stem_prefix)?
+        } else {
+            file_name.strip_prefix(&with_stem_prefix)?
+        };
+
+        index_str.parse().ok()
+    }
+
+    fn prune_old_segments(&mut self, max_files: usize) {
+        while self.segment_paths.len() > max_files {
+            if let Some(old_path) = self.segment_paths.pop_front()
+                && let Err(err) = std::fs::remove_file(&old_path)
+            {
+                tracing::warn!(
+                    path = %old_path.display(),
+                    error = %err,
+                    "failed to remove old rotated pcap file"
+                );
+            }
+        }
+    }
+}
 
 fn write_packet_to_savefile(
-    savefile: &mut Option<&mut pcap::Savefile>,
+    savefile: &mut Option<&mut RotatingSavefile>,
     packet: &pcap::Packet<'_>,
     packet_count: u64,
 ) -> Result<(), pcap::Error> {
     if let Some(file) = savefile.as_mut() {
-        file.write(packet);
-        if packet_count.is_multiple_of(SAVEFILE_FLUSH_INTERVAL_PACKETS) {
-            file.flush()?;
-        }
+        file.write_packet(packet, packet_count)?;
     }
     Ok(())
 }
 
-fn flush_savefile(savefile: &mut Option<&mut pcap::Savefile>) -> Result<(), pcap::Error> {
+fn maybe_rotate_savefile(
+    cap: &mut CaptureSource,
+    savefile: &mut Option<&mut RotatingSavefile>,
+) -> Result<(), pcap::Error> {
+    if let Some(file) = savefile.as_mut() {
+        file.rotate_if_needed(cap)?;
+    }
+    Ok(())
+}
+
+fn flush_savefile(savefile: &mut Option<&mut RotatingSavefile>) -> Result<(), pcap::Error> {
     if let Some(file) = savefile.as_mut() {
         file.flush()?;
     }
@@ -538,7 +775,7 @@ fn run_capture_inline(
     running: &Arc<AtomicBool>,
     link_type: protocol::LinkType,
     cap: &mut CaptureSource,
-    mut savefile: Option<&mut pcap::Savefile>,
+    mut savefile: Option<&mut RotatingSavefile>,
     web_handle: Option<&web::server::WebHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     println!();
@@ -593,6 +830,11 @@ fn run_capture_inline(
         // Check packet count limit
         if config.run.count > 0 && packet_count >= config.run.count {
             break;
+        }
+
+        if let Err(err) = maybe_rotate_savefile(cap, &mut savefile) {
+            tracing::error!(error = %err, "pcap rotate error");
+            return Err(Box::new(err));
         }
 
         // Read next packet
@@ -879,7 +1121,7 @@ fn run_capture_pipeline(
     running: &Arc<AtomicBool>,
     link_type: protocol::LinkType,
     cap: &mut CaptureSource,
-    mut savefile: Option<&mut pcap::Savefile>,
+    mut savefile: Option<&mut RotatingSavefile>,
     web_handle: Option<&web::server::WebHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Use the full snaplen as the pool buffer size so every captured packet
@@ -928,6 +1170,11 @@ fn run_capture_pipeline(
         while running.load(Ordering::SeqCst) {
             if config.run.count > 0 && packet_count >= config.run.count {
                 break;
+            }
+
+            if let Err(err) = maybe_rotate_savefile(cap, &mut savefile) {
+                tracing::error!(error = %err, "pcap rotate error");
+                return Err(Box::new(err));
             }
 
             let packet = match cap.next_packet() {
@@ -1140,6 +1387,12 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
     }
     if let Some(value) = &args.write_pcap {
         output.write_pcap = Some(value.clone());
+    }
+    if let Some(value) = args.write_pcap_rotate_mb {
+        output.write_pcap_rotate_mb = value;
+    }
+    if let Some(value) = args.write_pcap_max_files {
+        output.write_pcap_max_files = value;
     }
     if let Some(value) = &args.export_json {
         output.export_json = Some(value.clone());
