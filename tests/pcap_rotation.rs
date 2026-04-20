@@ -57,9 +57,20 @@ fn make_large_ethernet_packet(payload_len: usize) -> Vec<u8> {
     let total_len_u16 = u16::try_from(total_len).expect("payload too large for IPv4 header");
 
     let mut packet = vec![
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
-        0x08, 0x00, // ethertype IPv4
+        0xff,
+        0xff,
+        0xff,
+        0xff,
+        0xff,
+        0xff, // dst
+        0x00,
+        0x11,
+        0x22,
+        0x33,
+        0x44,
+        0x55, // src
+        0x08,
+        0x00, // ethertype IPv4
         0x45, // version + ihl
         0x00, // dscp/ecn
         (total_len_u16 >> 8) as u8,
@@ -68,8 +79,8 @@ fn make_large_ethernet_packet(payload_len: usize) -> Vec<u8> {
         0x01, // id
         0x00,
         0x00, // flags + fragment offset
-        64, // ttl
-        6,  // protocol TCP
+        64,   // ttl
+        6,    // protocol TCP
         0x00,
         0x00, // checksum (not validated by parser)
         10,
