@@ -194,7 +194,11 @@ fn run_capture(
     let link_type = protocol::LinkType::from_pcap_value(cap.get_datalink().0);
     let rotation_policy = PcapRotationPolicy::from_output(&config.output);
     let mut savefile = match &config.output.write_pcap {
-        Some(path) => Some(RotatingSavefile::open(&mut cap, path.as_path(), rotation_policy)?),
+        Some(path) => Some(RotatingSavefile::open(
+            &mut cap,
+            path.as_path(),
+            rotation_policy,
+        )?),
         None => None,
     };
     let capture_mode = cap.mode();
