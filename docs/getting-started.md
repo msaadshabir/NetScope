@@ -92,6 +92,8 @@ sudo netscope --web --quiet
 
 Open <http://127.0.0.1:8080> in a browser. If TLS is enabled (`[web.tls] enabled = true`), open `https://...` instead. The `--quiet` flag suppresses per-packet terminal output, so the dashboard is the primary interface.
 
+Prometheus-compatible metrics are available at `/metrics` on the same server (shares dashboard TLS/auth settings).
+
 For remote access hardening, configure HTTPS + Basic auth via `[web.tls]` and `[web.auth]`, then connect to `https://...`.
 
 For dashboard endpoints, live update behavior, and tuning guidance, see [Web Dashboard](web-dashboard.md).

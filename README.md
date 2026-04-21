@@ -12,6 +12,7 @@ High-performance packet capture and protocol analysis tool built in Rust. Captur
 - **Sharded pipeline** -- multi-core processing with lock-free per-shard flow tracking
 - **Anomaly detection** -- SYN flood and port scan alerts with configurable thresholds
 - **Web dashboard** -- real-time browser UI with throughput charts, top flows, packet inspector, alerts, and a perf overlay backed by merged websocket frames (Chart.js served locally for offline/airgapped use)
+- **Prometheus metrics** -- `/metrics` endpoint on the web server for scrape-friendly counters and gauges
 - **Live drop metrics** -- periodic kernel/libpcap drop and interface drop deltas/totals (CLI + dashboard)
 - **Export** -- flows to JSON/CSV, alerts to JSONL (inline and pipeline modes), expired/evicted flows to JSONL, packets to pcap (optional size-based rotation via `--write-pcap-rotate-mb` / `--write-pcap-max-files`)
 - **TOML configuration** with full CLI override support
@@ -33,6 +34,9 @@ sudo ./target/release/netscope
 
 # Start the web dashboard (open http://127.0.0.1:8080; use https://... if TLS is enabled)
 sudo ./target/release/netscope --web --quiet
+
+# In another terminal, scrape Prometheus metrics
+curl http://127.0.0.1:8080/metrics
 ```
 
 Live capture requires elevated privileges (`sudo` or `CAP_NET_RAW` on Linux). Offline pcap analysis (`--read-pcap`) does not. For more workflows, including exports, anomaly detection, and pipeline mode, see [Usage Examples](docs/usage.md). For dashboard-specific behavior and tuning, see [Web Dashboard](docs/web-dashboard.md).

@@ -132,6 +132,15 @@ sudo netscope --web --web-bind 0.0.0.0 --web-port 8443 \
 --web-auth --web-auth-user netscope --web-auth-pass-file /etc/netscope/dashboard.pass
 ```
 
+Prometheus-compatible metrics are available at `/metrics` on the same server. This endpoint shares the web dashboard's TLS and HTTP Basic auth settings:
+
+```bash
+curl http://127.0.0.1:8080/metrics
+
+# Example with Basic auth + self-signed TLS
+curl -u netscope:YOUR_PASSWORD -k https://127.0.0.1:8443/metrics
+```
+
 Combine with other features:
 
 ```bash

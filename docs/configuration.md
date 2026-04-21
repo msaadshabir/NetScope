@@ -154,6 +154,8 @@ These keys apply only when `web.enabled = true`. Packet sampling uses the captur
 
 Note: `payload_bytes` limits how many bytes are stored for the web packet detail hex dump (see `build_packet_data` in `src/lib.rs`). It does not change capture `snaplen` or what is written to pcap.
 
+Prometheus-compatible metrics are served at `GET /metrics` when the web dashboard is enabled. This endpoint shares the same TLS (`[web.tls]`) and HTTP Basic auth (`[web.auth]`) settings as the rest of the dashboard.
+
 ### `[web.tls]`
 
 | Key         | Type | Default | Description                                                   |
@@ -166,12 +168,12 @@ When enabled, NetScope serves the dashboard over HTTPS and expects certificate/k
 
 ### `[web.auth]`
 
-| Key             | Type   | Default | Description                                                              |
-| --------------- | ------ | ------- | ------------------------------------------------------------------------ |
-| `enabled`       | bool   | `false` | Enable HTTP Basic auth for all dashboard routes (including `/ws`).       |
-| `username`      | string | `""`    | HTTP Basic auth username. Required when `web.auth.enabled = true`.       |
-| `password`      | string | (none)  | Inline password value. Use either this key or `password_file`, not both. |
-| `password_file` | path   | (none)  | File containing the password value. Use either this key or `password`.   |
+| Key             | Type   | Default | Description                                                                       |
+| --------------- | ------ | ------- | --------------------------------------------------------------------------------- |
+| `enabled`       | bool   | `false` | Enable HTTP Basic auth for all dashboard routes (including `/ws` and `/metrics`). |
+| `username`      | string | `""`    | HTTP Basic auth username. Required when `web.auth.enabled = true`.                |
+| `password`      | string | (none)  | Inline password value. Use either this key or `password_file`, not both.          |
+| `password_file` | path   | (none)  | File containing the password value. Use either this key or `password`.            |
 
 Validation rules when `web.auth.enabled = true`:
 

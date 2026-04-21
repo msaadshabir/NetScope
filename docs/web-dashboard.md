@@ -31,8 +31,9 @@ TLS ClientHello SNI detection is best-effort and packet-level (no TCP reassembly
 | `/`           | GET    | Serves the dashboard HTML (embedded in the binary via `rust-embed`). |
 | `/ws`         | GET    | WebSocket endpoint for real-time data.                               |
 | `/api/health` | GET    | Health check, returns `200 OK`.                                      |
+| `/metrics`    | GET    | Prometheus-compatible metrics in text exposition format.             |
 
-When dashboard auth is enabled (`[web.auth] enabled = true`), all endpoints above require HTTP Basic auth, including `/api/health` and the WebSocket handshake.
+When dashboard auth is enabled (`[web.auth] enabled = true`), all endpoints above require HTTP Basic auth, including `/api/health`, `/metrics`, and the WebSocket handshake.
 
 The dashboard HTML/CSS/JS is embedded into the binary at compile time (no separate frontend build step). Chart.js is vendored under `web/static/vendor/chartjs/` and served locally, so charts render in airgapped/offline environments. The bundle is served at `/vendor/chartjs/chart.umd.min.js`.
 
@@ -163,4 +164,4 @@ Notes:
 
 - If auth is enabled without TLS, credentials are sent over cleartext HTTP Basic auth. Use TLS for non-localhost deployments.
 - Self-signed certificates are supported; browsers may show an initial certificate warning.
-- Auth applies to static pages, `/api/health`, and `/ws`.
+- Auth applies to static pages, `/api/health`, `/metrics`, and `/ws`.

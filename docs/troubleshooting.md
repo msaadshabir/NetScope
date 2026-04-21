@@ -139,6 +139,7 @@ Note: raw-IP pcaps are commonly tagged as link type `101` or `12` depending on t
 
 ```bash
 curl -u netscope:YOUR_PASSWORD https://127.0.0.1:8443/api/health
+curl -u netscope:YOUR_PASSWORD https://127.0.0.1:8443/metrics
 ```
 
 ## Web Dashboard Shows No Data
