@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use crate::flow::{ExpiredFlowEvent, FlowDelta, FlowSnapshot};
 use crate::jsonl::JsonlSink;
+use crate::metrics;
 use crate::web::messages::{AlertMsg, CaptureEvent, FlowInfo, StatsTick};
 
 use super::worker::{ShardShutdown, ShardTick, WorkerEvent};
@@ -164,6 +165,15 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                         let merged =
                             merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats, kstats);
 
+                        metrics::observe_tick(
+                            merged.bytes,
+                            merged.packets,
+                            merged.active_flows,
+                            merged.dispatch_drops,
+                            merged.kernel_drops,
+                            merged.kernel_if_drops,
+                        );
+
                         // Forward to web dashboard.
                         if let Some(tx) = &web_event_tx {
                             let stats_tick = aggregated_to_stats_tick(
@@ -220,6 +230,15 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                     let kstats = kernel_tick_stats(&kernel_stats, &mut prev_kernel_totals);
                     let merged =
                         merge_ticks(&mut pending_ticks, elapsed, max_top_n, &stats, kstats);
+
+                    metrics::observe_tick(
+                        merged.bytes,
+                        merged.packets,
+                        merged.active_flows,
+                        merged.dispatch_drops,
+                        merged.kernel_drops,
+                        merged.kernel_if_drops,
+                    );
 
                     if let Some(tx) = &web_event_tx {
                         let stats_tick = aggregated_to_stats_tick(

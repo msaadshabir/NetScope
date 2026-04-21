@@ -1,6 +1,8 @@
 mod cli;
 
-use netscope::{analysis, capture, config, display, flow, memory, pipeline, protocol, web};
+use netscope::{
+    analysis, capture, config, display, flow, memory, metrics, pipeline, protocol, web,
+};
 use netscope::{build_packet_data, maybe_analyze_anomaly};
 
 use clap::Parser;
@@ -12,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 fn main() {
+    metrics::initialize();
+
     let args = cli::Cli::parse();
 
     if let Some(count) = args.synthetic_flows {
@@ -1038,6 +1042,15 @@ fn run_capture_inline(
                     dropped: kernel_drops,
                     if_dropped: kernel_if_drops,
                 };
+
+                metrics::observe_tick(
+                    web_tick_bytes,
+                    web_tick_packets,
+                    active_flows,
+                    0,
+                    kernel_delta.dropped,
+                    kernel_delta.if_dropped,
+                );
 
                 let tick = web::messages::StatsTick {
                     ts: std::time::SystemTime::now()

@@ -165,6 +165,7 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
                 let app = Router::new()
                     .route("/ws", get(ws_handler))
                     .route("/api/health", get(health_handler))
+                    .route("/metrics", get(metrics_handler))
                     .fallback(get(static_handler))
                     .with_state(state_clone.clone())
                     .layer(middleware::from_fn_with_state(state_clone, auth_middleware));
@@ -287,6 +288,18 @@ async fn broadcast_message(state: &Arc<AppState>, msg: WsServerMsg) {
 
 async fn health_handler() -> &'static str {
     "ok"
+}
+
+async fn metrics_handler() -> Response {
+    let body = crate::metrics::render_prometheus_text();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(
+            header::CONTENT_TYPE,
+            crate::metrics::prometheus_content_type(),
+        )
+        .body(axum::body::Body::from(body))
+        .unwrap()
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {
@@ -567,6 +580,7 @@ mod tests {
         let state = test_state(auth);
         Router::new()
             .route("/api/health", get(health_handler))
+            .route("/metrics", get(metrics_handler))
             .with_state(state.clone())
             .layer(middleware::from_fn_with_state(state, auth_middleware))
     }
@@ -623,5 +637,65 @@ mod tests {
         let response = app.oneshot(request).await.expect("router should respond");
 
         assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_without_auth_config_is_public() {
+        let app = test_router(None);
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .expect("content type header should be present"),
+            crate::metrics::prometheus_content_type()
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_requires_auth_when_configured() {
+        let app = test_router(Some(BasicAuthCredentials {
+            username: "netscope".into(),
+            password: "secret".into(),
+        }));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn metrics_accepts_valid_basic_auth_header() {
+        let app = test_router(Some(BasicAuthCredentials {
+            username: "netscope".into(),
+            password: "secret".into(),
+        }));
+        let token = BASE64_STANDARD.encode("netscope:secret");
+        let request = Request::builder()
+            .uri("/metrics")
+            .header(header::AUTHORIZATION, format!("Basic {}", token))
+            .body(Body::empty())
+            .expect("request should build");
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("response body should be valid utf8");
+        assert!(body.contains("netscope_build_info"));
     }
 }
