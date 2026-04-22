@@ -292,14 +292,13 @@ async fn health_handler() -> &'static str {
 
 async fn metrics_handler() -> Response {
     let body = crate::metrics::render_prometheus_text();
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(
-            header::CONTENT_TYPE,
-            crate::metrics::prometheus_content_type(),
-        )
-        .body(axum::body::Body::from(body))
-        .unwrap()
+    let mut response = Response::new(axum::body::Body::from(body));
+    *response.status_mut() = StatusCode::OK;
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static(crate::metrics::prometheus_content_type()),
+    );
+    response
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<Arc<AppState>>) -> impl IntoResponse {

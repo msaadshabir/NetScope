@@ -1548,7 +1548,9 @@ impl TcpSeqTracker {
     fn on_ack<F: FnMut(f64)>(&mut self, ts: f64, ack_no: u32, mut cb: F) {
         while let Some(front) = self.in_flight.front() {
             if front.seq_end.wrapping_sub(ack_no) as i32 <= 0 {
-                let sample = self.in_flight.pop_front().unwrap();
+                let Some(sample) = self.in_flight.pop_front() else {
+                    break;
+                };
                 let rtt_ms = (ts - sample.ts).max(0.0) * 1000.0;
                 cb(rtt_ms);
             } else {
