@@ -1,6 +1,7 @@
 pub mod dns;
 pub mod ethernet;
 pub mod icmp;
+pub mod icmpv6;
 pub mod ipv4;
 pub mod ipv6;
 pub mod loopback;
@@ -253,6 +254,7 @@ pub enum TransportHeader<'a> {
     Tcp(tcp::TcpHeader<'a>),
     Udp(udp::UdpHeader<'a>),
     Icmp(icmp::IcmpHeader<'a>),
+    Icmpv6(icmpv6::Icmpv6Header<'a>),
 }
 
 /// Parse a complete packet from raw bytes.
@@ -416,15 +418,20 @@ fn parse_transport<'a>(
             }
             Err(_) => (None, l4_data),
         },
-        Some(IpProtocol::Icmp) | Some(IpProtocol::Icmpv6) => {
-            match icmp::IcmpHeader::parse(l4_data) {
-                Ok(hdr) => {
-                    let payload = hdr.payload();
-                    (Some(TransportHeader::Icmp(hdr)), payload)
-                }
-                Err(_) => (None, l4_data),
+        Some(IpProtocol::Icmp) => match icmp::IcmpHeader::parse(l4_data) {
+            Ok(hdr) => {
+                let payload = hdr.payload();
+                (Some(TransportHeader::Icmp(hdr)), payload)
             }
-        }
+            Err(_) => (None, l4_data),
+        },
+        Some(IpProtocol::Icmpv6) => match icmpv6::Icmpv6Header::parse(l4_data) {
+            Ok(hdr) => {
+                let payload = hdr.payload();
+                (Some(TransportHeader::Icmpv6(hdr)), payload)
+            }
+            Err(_) => (None, l4_data),
+        },
         _ => (None, l4_data),
     }
 }
@@ -449,6 +456,29 @@ mod tests {
         pkt[20..22].copy_from_slice(&src_port.to_be_bytes());
         pkt[22..24].copy_from_slice(&dst_port.to_be_bytes());
         pkt[32] = 0x50; // TCP data offset = 5 (20-byte header)
+        pkt
+    }
+
+    fn make_icmpv6_ipv6_payload(
+        src_ip: [u8; 16],
+        dst_ip: [u8; 16],
+        identifier: u16,
+        sequence: u16,
+    ) -> Vec<u8> {
+        let mut pkt = vec![0u8; 40 + 8];
+        pkt[0] = 0x60; // version
+        pkt[4] = 0x00;
+        pkt[5] = 0x08; // payload length = 8-byte ICMPv6 header
+        pkt[6] = 58; // next header = ICMPv6
+        pkt[7] = 64; // hop limit
+        pkt[8..24].copy_from_slice(&src_ip);
+        pkt[24..40].copy_from_slice(&dst_ip);
+
+        // ICMPv6 echo request header
+        pkt[40] = 128;
+        pkt[41] = 0;
+        pkt[44..46].copy_from_slice(&identifier.to_be_bytes());
+        pkt[46..48].copy_from_slice(&sequence.to_be_bytes());
         pkt
     }
 
@@ -501,5 +531,26 @@ mod tests {
         assert!(matches!(parsed.link, LinkHeader::LinuxSll(_)));
         assert!(matches!(parsed.network, Some(NetworkHeader::Ipv4(_))));
         assert!(matches!(parsed.transport, Some(TransportHeader::Tcp(_))));
+    }
+
+    #[test]
+    fn parse_raw_ip_ipv6_icmpv6() {
+        let src_ip = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+        let dst_ip = [0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+        let raw = make_icmpv6_ipv6_payload(src_ip, dst_ip, 0x1234, 0x000a);
+
+        let parsed = parse_packet_with_linktype(&raw, LinkType::RawIp).unwrap();
+
+        assert!(matches!(parsed.link, LinkHeader::RawIp));
+        assert!(matches!(parsed.network, Some(NetworkHeader::Ipv6(_))));
+
+        match parsed.transport {
+            Some(TransportHeader::Icmpv6(hdr)) => {
+                assert_eq!(hdr.icmp_type(), icmpv6::Icmpv6Type::EchoRequest);
+                assert_eq!(hdr.identifier(), 0x1234);
+                assert_eq!(hdr.sequence(), 0x000a);
+            }
+            _ => panic!("expected ICMPv6 transport header"),
+        }
     }
 }
