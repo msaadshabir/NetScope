@@ -86,6 +86,10 @@ pub fn summarise_packet(
                 proto = "ICMP".into();
                 info = format!("{}", hdr);
             }
+            protocol::TransportHeader::Icmpv6(hdr) => {
+                proto = "ICMPv6".into();
+                info = format!("{}", hdr);
+            }
         }
     }
 

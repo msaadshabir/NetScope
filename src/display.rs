@@ -53,6 +53,9 @@ fn build_packet_summary_line(
             TransportHeader::Icmp(hdr) => {
                 summary.push_str(&format!(" | ICMP {}", hdr));
             }
+            TransportHeader::Icmpv6(hdr) => {
+                summary.push_str(&format!(" | ICMPv6 {}", hdr));
+            }
         }
     }
 
@@ -282,6 +285,24 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 );
                 println!("    Code:     {}", hdr.code());
                 println!("    Checksum: 0x{:04x}", hdr.checksum());
+            }
+            TransportHeader::Icmpv6(hdr) => {
+                println!("  ICMPv6:");
+                println!(
+                    "    Type:     {} ({})",
+                    hdr.icmp_type(),
+                    hdr.icmp_type_raw()
+                );
+                println!("    Code:     {}", hdr.code());
+                println!("    Checksum: 0x{:04x}", hdr.checksum());
+                if matches!(
+                    hdr.icmp_type(),
+                    protocol::icmpv6::Icmpv6Type::EchoRequest
+                        | protocol::icmpv6::Icmpv6Type::EchoReply
+                ) {
+                    println!("    ID:       {}", hdr.identifier());
+                    println!("    Seq:      {}", hdr.sequence());
+                }
             }
         }
     }

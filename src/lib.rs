@@ -373,6 +373,27 @@ fn push_transport_layers<'a>(
                     ],
                 });
             }
+            protocol::TransportHeader::Icmpv6(hdr) => {
+                let mut fields = vec![
+                    ("Type".into(), format!("{}", hdr.icmp_type())),
+                    ("Code".into(), format!("{}", hdr.code())),
+                    ("Checksum".into(), format!("0x{:04x}", hdr.checksum())),
+                ];
+
+                if matches!(
+                    hdr.icmp_type(),
+                    protocol::icmpv6::Icmpv6Type::EchoRequest
+                        | protocol::icmpv6::Icmpv6Type::EchoReply
+                ) {
+                    fields.push(("Identifier".into(), format!("{}", hdr.identifier())));
+                    fields.push(("Sequence".into(), format!("{}", hdr.sequence())));
+                }
+
+                layers.push(web::messages::LayerDetail {
+                    name: "ICMPv6".into(),
+                    fields,
+                });
+            }
         }
     }
 }
