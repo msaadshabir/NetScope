@@ -43,6 +43,7 @@ netscope/
       tcp.rs                    # TCP header parser
       udp.rs                    # UDP header parser
       icmp.rs                   # ICMP header parser
+      icmpv6.rs                 # ICMPv6 header parser
       dns.rs                    # DNS message parser (UDP/53)
       tls.rs                    # TLS ClientHello parser (SNI extraction)
     analysis/

@@ -12,7 +12,7 @@ Flows are identified by a canonical bidirectional key:
 
 Where each endpoint is `(ip, port)` and endpoints are ordered deterministically (the "smaller" endpoint by `(ip_version, ip_bytes, port)` is always endpoint A). This means packets in both directions of a conversation map to the same flow entry.
 
-Only TCP and UDP flows are tracked. ICMP and other protocols are parsed but do not create flow entries.
+Only TCP and UDP flows are tracked. ICMP, ICMPv6, and other protocols are parsed but do not create flow entries.
 
 For memory-sensitive runs, NetScope also has an internal scale-mode storage path. When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, flows are stored in compact split IPv4/IPv6 tables and omit deep TCP sequence-tracking state. This switch is automatic and is driven entirely by those three analysis toggles.
 
@@ -20,19 +20,19 @@ For memory-sensitive runs, NetScope also has an internal scale-mode storage path
 
 Each flow tracks:
 
-| Field | Description |
-|---|---|
-| `first_seen` / `last_seen` | Timestamps of the first and most recent packet. |
-| `packets_a_to_b` / `packets_b_to_a` | Packet counts in each direction. |
-| `bytes_a_to_b` / `bytes_b_to_a` | Byte counts in each direction (wire length). |
-| `tcp_state` | Current TCP connection state (TCP flows only). |
-| `client` | Which side initiated the connection (sent the first SYN). |
-| `retransmissions` | Number of detected TCP retransmissions. |
-| `out_of_order` | Number of detected out-of-order TCP segments. |
-| `rtt_last_ms` | Most recent RTT sample (milliseconds). |
-| `rtt_min_ms` | Minimum observed RTT. |
-| `rtt_ewma_ms` | Exponentially weighted moving average RTT (alpha = 0.125). |
-| `rtt_samples` | Number of RTT samples collected. |
+| Field                               | Description                                                |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `first_seen` / `last_seen`          | Timestamps of the first and most recent packet.            |
+| `packets_a_to_b` / `packets_b_to_a` | Packet counts in each direction.                           |
+| `bytes_a_to_b` / `bytes_b_to_a`     | Byte counts in each direction (wire length).               |
+| `tcp_state`                         | Current TCP connection state (TCP flows only).             |
+| `client`                            | Which side initiated the connection (sent the first SYN).  |
+| `retransmissions`                   | Number of detected TCP retransmissions.                    |
+| `out_of_order`                      | Number of detected out-of-order TCP segments.              |
+| `rtt_last_ms`                       | Most recent RTT sample (milliseconds).                     |
+| `rtt_min_ms`                        | Minimum observed RTT.                                      |
+| `rtt_ewma_ms`                       | Exponentially weighted moving average RTT (alpha = 0.125). |
+| `rtt_samples`                       | Number of RTT samples collected.                           |
 
 In scale mode, NetScope still tracks bidirectional byte/packet counters, TCP state, and client direction, but RTT / retransmission / out-of-order fields remain unset in exported snapshots.
 
@@ -106,11 +106,11 @@ In pipeline mode, the heavy-hitter limit is sized from `max(stats.top_flows, web
 
 For authoritative defaults and the full schema, see [Configuration](configuration.md). The table below highlights the flow-related keys that matter most for this subsystem.
 
-| Key | Default | Description |
-|---|---|---|
-| `flow.timeout_secs` | `60.0` | Inactivity timeout. |
-| `flow.max_flows` | `100000` | Maximum tracked flows. |
-| `analysis.rtt` | `true` | Enable RTT estimation. |
-| `analysis.retrans` | `true` | Enable retransmission detection. |
-| `analysis.out_of_order` | `true` | Enable out-of-order detection. |
-| `stats.top_flows` | `0` | Top-N flows per stats tick. |
+| Key                     | Default  | Description                      |
+| ----------------------- | -------- | -------------------------------- |
+| `flow.timeout_secs`     | `60.0`   | Inactivity timeout.              |
+| `flow.max_flows`        | `100000` | Maximum tracked flows.           |
+| `analysis.rtt`          | `true`   | Enable RTT estimation.           |
+| `analysis.retrans`      | `true`   | Enable retransmission detection. |
+| `analysis.out_of_order` | `true`   | Enable out-of-order detection.   |
+| `stats.top_flows`       | `0`      | Top-N flows per stats tick.      |

@@ -104,7 +104,7 @@ For dashboard endpoints, live update behavior, and tuning guidance, see [Web Das
 | --------- | ---------------------------------------------------------------------- |
 | Link      | Ethernet II (incl. 802.1Q VLAN), Linux SLL, loopback NULL/LOOP, raw IP |
 | Network   | IPv4 (with checksum verification), IPv6                                |
-| Transport | TCP, UDP, ICMP                                                         |
+| Transport | TCP, UDP, ICMP, ICMPv6                                                 |
 
 **Known limitations:**
 

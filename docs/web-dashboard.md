@@ -16,7 +16,7 @@ If TLS is enabled (`[web.tls] enabled = true`), use `https://...` instead.
 - **Time-series chart** -- dual-axis throughput and packet rate history.
 - **Top flows table** -- ranked by throughput delta per tick, showing protocol, endpoints, rate, total bytes, and TCP state.
 - **Packet list** -- sampled packets displayed in real time, newest at top.
-- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet / Linux SLL / loopback / raw IP, IP, TCP/UDP/ICMP, DNS for UDP/53, and TLS ClientHello SNI when detected) and hex dump, fetched on demand from the server.
+- **Packet inspector** -- click any packet to see the full protocol tree (Ethernet / Linux SLL / loopback / raw IP, IP, TCP/UDP/ICMP/ICMPv6, DNS for UDP/53, and TLS ClientHello SNI when detected) and hex dump, fetched on demand from the server.
 - **Alerts tab** -- real-time anomaly alerts (SYN flood, port scan).
 - **Perf overlay** -- open `/?perf=1` to show dashboard fps, render latency p50/p95/p99, dropped frame count, and estimated client/server clock offset.
 - **Auto-reconnect** -- the WebSocket reconnects automatically after disconnection.
