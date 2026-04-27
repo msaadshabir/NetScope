@@ -70,6 +70,7 @@ pub enum EtherType {
     Ipv6 = 0x86DD,
     Arp = 0x0806,
     VlanTagged = 0x8100,
+    VlanService = 0x88A8,
     Mpls = 0x8847,
     MplsMulticast = 0x8848,
     Unknown(u16),
@@ -82,6 +83,7 @@ impl From<u16> for EtherType {
             0x86DD => EtherType::Ipv6,
             0x0806 => EtherType::Arp,
             0x8100 => EtherType::VlanTagged,
+            0x88A8 => EtherType::VlanService,
             0x8847 => EtherType::Mpls,
             0x8848 => EtherType::MplsMulticast,
             other => EtherType::Unknown(other),
@@ -97,10 +99,15 @@ impl EtherType {
             EtherType::Ipv6 => 0x86DD,
             EtherType::Arp => 0x0806,
             EtherType::VlanTagged => 0x8100,
+            EtherType::VlanService => 0x88A8,
             EtherType::Mpls => 0x8847,
             EtherType::MplsMulticast => 0x8848,
             EtherType::Unknown(v) => *v,
         }
+    }
+
+    pub fn is_vlan_tag(self) -> bool {
+        matches!(self, EtherType::VlanTagged | EtherType::VlanService)
     }
 }
 
@@ -111,6 +118,7 @@ impl fmt::Display for EtherType {
             EtherType::Ipv6 => write!(f, "IPv6"),
             EtherType::Arp => write!(f, "ARP"),
             EtherType::VlanTagged => write!(f, "802.1Q VLAN"),
+            EtherType::VlanService => write!(f, "802.1ad VLAN"),
             EtherType::Mpls => write!(f, "MPLS"),
             EtherType::MplsMulticast => write!(f, "MPLS Multicast"),
             EtherType::Unknown(v) => write!(f, "Unknown(0x{:04x})", v),
@@ -186,6 +194,7 @@ impl std::error::Error for ParseError {}
 pub struct ParsedPacket<'a> {
     pub link: LinkHeader<'a>,
     pub vlan: Option<VlanTag>,
+    pub vlan_stack: Option<VlanStack>,
     pub network: Option<NetworkHeader<'a>>,
     pub transport: Option<TransportHeader<'a>>,
     pub payload: &'a [u8],
@@ -211,12 +220,70 @@ impl fmt::Display for LinkHeader<'_> {
     }
 }
 
-/// VLAN tag (802.1Q)
-#[derive(Debug, Clone, Copy)]
+/// VLAN tag (802.1Q or 802.1ad)
+#[derive(Debug, Clone, Copy, Default)]
 pub struct VlanTag {
     pub priority: u8,
     pub dei: bool,
     pub vlan_id: u16,
+}
+
+pub const VLAN_STACK_CAPACITY: usize = 4;
+
+/// Fixed-capacity VLAN tag stack (outer -> inner).
+#[derive(Debug, Clone, Copy)]
+pub struct VlanStack {
+    tags: [VlanTag; VLAN_STACK_CAPACITY],
+    tag_types: [EtherType; VLAN_STACK_CAPACITY],
+    len: usize,
+    truncated: bool,
+}
+
+impl VlanStack {
+    pub fn new() -> Self {
+        Self {
+            tags: [VlanTag::default(); VLAN_STACK_CAPACITY],
+            tag_types: [EtherType::VlanTagged; VLAN_STACK_CAPACITY],
+            len: 0,
+            truncated: false,
+        }
+    }
+
+    pub fn push(&mut self, tag: VlanTag) {
+        let _ = self.push_with_type(tag, EtherType::VlanTagged);
+    }
+
+    pub fn push_with_type(&mut self, tag: VlanTag, tag_type: EtherType) -> bool {
+        if self.len < VLAN_STACK_CAPACITY {
+            self.tags[self.len] = tag;
+            self.tag_types[self.len] = tag_type;
+            self.len += 1;
+            true
+        } else {
+            self.truncated = true;
+            false
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn as_slice(&self) -> &[VlanTag] {
+        &self.tags[..self.len]
+    }
+
+    pub fn tag_types(&self) -> &[EtherType] {
+        &self.tag_types[..self.len]
+    }
+
+    pub fn is_truncated(&self) -> bool {
+        self.truncated
+    }
 }
 
 /// Network layer header
@@ -307,22 +374,40 @@ pub fn parse_packet_with_linktype(
         }
     };
 
-    let mut vlan = None;
+    let mut vlan_stack: Option<VlanStack> = None;
 
-    // Handle VLAN tagging (802.1Q) for link types that surface EtherType.
-    if let Some(EtherType::VlanTagged) = ether_type {
+    // Handle VLAN tagging (802.1Q / 802.1ad) for link types that surface EtherType.
+    while let Some(link_ether_type) = ether_type {
+        if !link_ether_type.is_vlan_tag() {
+            break;
+        }
+
         if remaining.len() < 4 {
             return Err(ParseError::TooShort {
                 expected: 4,
                 actual: remaining.len(),
             });
         }
+
         let tci = u16::from_be_bytes([remaining[0], remaining[1]]);
-        vlan = Some(VlanTag {
+        let tag_type = link_ether_type;
+        let tag = VlanTag {
             priority: (tci >> 13) as u8,
             dei: (tci >> 12) & 1 == 1,
             vlan_id: tci & 0x0FFF,
-        });
+        };
+
+        match vlan_stack.as_mut() {
+            Some(stack) => {
+                stack.push_with_type(tag, tag_type);
+            }
+            None => {
+                let mut stack = VlanStack::new();
+                stack.push_with_type(tag, tag_type);
+                vlan_stack = Some(stack);
+            }
+        }
+
         ether_type = Some(EtherType::from(u16::from_be_bytes([
             remaining[2],
             remaining[3],
@@ -339,9 +424,14 @@ pub fn parse_packet_with_linktype(
     // Layer 4: Transport
     let (transport, payload) = parse_transport(ip_proto, l4_data);
 
+    let vlan = vlan_stack
+        .as_ref()
+        .and_then(|stack| stack.as_slice().first().copied());
+
     Ok(ParsedPacket {
         link,
         vlan,
+        vlan_stack,
         network,
         transport,
         payload,
@@ -486,6 +576,20 @@ mod tests {
         frame
     }
 
+    fn make_qinq_arp_frame() -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x88, 0xa8, // EtherType = 802.1ad VLAN (S-tag)
+            0x00, 0x64, // outer TCI (vlan id 100)
+            0x81, 0x00, // inner EtherType = 802.1Q VLAN (C-tag)
+            0x00, 0xc8, // inner TCI (vlan id 200)
+            0x08, 0x06, // inner EtherType = ARP
+        ];
+        frame.extend_from_slice(&make_arp_payload_request());
+        frame
+    }
+
     fn make_tcp_ipv4_payload(
         src_ip: [u8; 4],
         dst_ip: [u8; 4],
@@ -622,7 +726,11 @@ mod tests {
         let frame = make_vlan_arp_frame();
         let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
 
-        assert!(parsed.vlan.is_some());
+        let vlan = parsed.vlan.expect("expected vlan tag");
+        let stack = parsed.vlan_stack.expect("expected vlan stack");
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.as_slice()[0].vlan_id, 42);
+        assert_eq!(vlan.vlan_id, 42);
         match parsed.network {
             Some(NetworkHeader::Arp(hdr)) => {
                 assert_eq!(hdr.operation(), arp::ArpOperation::Request);
@@ -631,6 +739,63 @@ mod tests {
         }
 
         assert!(parsed.transport.is_none());
+    }
+
+    #[test]
+    fn parse_qinq_arp() {
+        let frame = make_qinq_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+
+        let vlan = parsed.vlan.expect("expected vlan tag");
+        let stack = parsed.vlan_stack.expect("expected vlan tags");
+        assert_eq!(stack.len(), 2);
+        assert_eq!(stack.as_slice()[0].vlan_id, 100);
+        assert_eq!(stack.as_slice()[1].vlan_id, 200);
+        assert_eq!(vlan.vlan_id, 100);
+
+        match parsed.network {
+            Some(NetworkHeader::Arp(hdr)) => {
+                assert_eq!(hdr.operation(), arp::ArpOperation::Request);
+            }
+            _ => panic!("expected ARP network header"),
+        }
+
+        assert!(parsed.transport.is_none());
+    }
+
+    fn make_multi_vlan_arp_frame(tags: &[u16]) -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x81, 0x00, // EtherType = 802.1Q VLAN
+        ];
+
+        for (idx, tag) in tags.iter().enumerate() {
+            frame.extend_from_slice(&tag.to_be_bytes());
+            if idx + 1 == tags.len() {
+                frame.extend_from_slice(&[0x08, 0x06]); // ARP
+            } else {
+                frame.extend_from_slice(&[0x81, 0x00]); // next VLAN tag
+            }
+        }
+
+        frame.extend_from_slice(&make_arp_payload_request());
+        frame
+    }
+
+    #[test]
+    fn vlan_stack_overflow_is_reported() {
+        let frame = make_multi_vlan_arp_frame(&[1, 2, 3, 4, 5]);
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+
+        let stack = parsed.vlan_stack.expect("expected vlan tags");
+        assert_eq!(stack.len(), VLAN_STACK_CAPACITY);
+        assert!(stack.is_truncated());
+        assert_eq!(stack.as_slice()[0].vlan_id, 1);
+        assert_eq!(stack.as_slice()[3].vlan_id, 4);
+
+        let vlan = parsed.vlan.expect("expected vlan tag");
+        assert_eq!(vlan.vlan_id, 1);
     }
 
     #[test]
