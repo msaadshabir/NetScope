@@ -1,3 +1,4 @@
+pub mod arp;
 pub mod dns;
 pub mod ethernet;
 pub mod icmp;
@@ -223,27 +224,31 @@ pub struct VlanTag {
 pub enum NetworkHeader<'a> {
     Ipv4(ipv4::Ipv4Header<'a>),
     Ipv6(ipv6::Ipv6Header<'a>),
+    Arp(arp::ArpPacket<'a>),
 }
 
 impl<'a> NetworkHeader<'a> {
-    pub fn src_ip(&self) -> IpAddr {
+    pub fn src_ip(&self) -> Option<IpAddr> {
         match self {
-            NetworkHeader::Ipv4(h) => IpAddr::V4(h.src_addr()),
-            NetworkHeader::Ipv6(h) => IpAddr::V6(h.src_addr()),
+            NetworkHeader::Ipv4(h) => Some(IpAddr::V4(h.src_addr())),
+            NetworkHeader::Ipv6(h) => Some(IpAddr::V6(h.src_addr())),
+            NetworkHeader::Arp(h) => h.sender_ipv4_addr().map(IpAddr::V4),
         }
     }
 
-    pub fn dst_ip(&self) -> IpAddr {
+    pub fn dst_ip(&self) -> Option<IpAddr> {
         match self {
-            NetworkHeader::Ipv4(h) => IpAddr::V4(h.dst_addr()),
-            NetworkHeader::Ipv6(h) => IpAddr::V6(h.dst_addr()),
+            NetworkHeader::Ipv4(h) => Some(IpAddr::V4(h.dst_addr())),
+            NetworkHeader::Ipv6(h) => Some(IpAddr::V6(h.dst_addr())),
+            NetworkHeader::Arp(h) => h.target_ipv4_addr().map(IpAddr::V4),
         }
     }
 
-    pub fn protocol(&self) -> IpProtocol {
+    pub fn protocol(&self) -> Option<IpProtocol> {
         match self {
-            NetworkHeader::Ipv4(h) => h.protocol(),
-            NetworkHeader::Ipv6(h) => h.next_header(),
+            NetworkHeader::Ipv4(h) => Some(h.protocol()),
+            NetworkHeader::Ipv6(h) => Some(h.next_header()),
+            NetworkHeader::Arp(_) => None,
         }
     }
 }
@@ -364,6 +369,11 @@ fn parse_network_from_ether_type<'a>(
             let payload = hdr.payload();
             (Some(NetworkHeader::Ipv6(hdr)), payload, Some(proto))
         }
+        EtherType::Arp => {
+            let hdr = arp::ArpPacket::parse(remaining)?;
+            let payload = hdr.payload();
+            (Some(NetworkHeader::Arp(hdr)), payload, None)
+        }
         _ => (None, remaining, None),
     };
 
@@ -439,6 +449,42 @@ fn parse_transport<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_arp_payload_request() -> Vec<u8> {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&1u16.to_be_bytes()); // htype = Ethernet
+        payload.extend_from_slice(&0x0800u16.to_be_bytes()); // ptype = IPv4
+        payload.push(6); // hlen
+        payload.push(4); // plen
+        payload.extend_from_slice(&1u16.to_be_bytes()); // op = request
+        payload.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // sha
+        payload.extend_from_slice(&[192, 168, 1, 10]); // spa
+        payload.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // tha
+        payload.extend_from_slice(&[192, 168, 1, 1]); // tpa
+        payload
+    }
+
+    fn make_ethernet_arp_frame() -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x08, 0x06, // EtherType = ARP
+        ];
+        frame.extend_from_slice(&make_arp_payload_request());
+        frame
+    }
+
+    fn make_vlan_arp_frame() -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x81, 0x00, // EtherType = 802.1Q VLAN
+            0x00, 0x2a, // TCI (vlan id 42)
+            0x08, 0x06, // inner EtherType = ARP
+        ];
+        frame.extend_from_slice(&make_arp_payload_request());
+        frame
+    }
 
     fn make_tcp_ipv4_payload(
         src_ip: [u8; 4],
@@ -552,5 +598,69 @@ mod tests {
             }
             _ => panic!("expected ICMPv6 transport header"),
         }
+    }
+
+    #[test]
+    fn parse_ethernet_arp() {
+        let frame = make_ethernet_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+
+        match parsed.network {
+            Some(NetworkHeader::Arp(hdr)) => {
+                assert_eq!(hdr.operation(), arp::ArpOperation::Request);
+                assert_eq!(hdr.sender_ipv4_addr().unwrap().octets(), [192, 168, 1, 10]);
+                assert_eq!(hdr.target_ipv4_addr().unwrap().octets(), [192, 168, 1, 1]);
+            }
+            _ => panic!("expected ARP network header"),
+        }
+
+        assert!(parsed.transport.is_none());
+    }
+
+    #[test]
+    fn parse_vlan_arp() {
+        let frame = make_vlan_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+
+        assert!(parsed.vlan.is_some());
+        match parsed.network {
+            Some(NetworkHeader::Arp(hdr)) => {
+                assert_eq!(hdr.operation(), arp::ArpOperation::Request);
+            }
+            _ => panic!("expected ARP network header"),
+        }
+
+        assert!(parsed.transport.is_none());
+    }
+
+    #[test]
+    fn network_header_helpers_arp_non_ipv4_are_not_applicable() {
+        let mut frame = make_ethernet_arp_frame();
+        frame[16] = 0x86;
+        frame[17] = 0xdd;
+
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+        let net = parsed
+            .network
+            .as_ref()
+            .expect("expected ARP network header");
+
+        assert!(net.src_ip().is_none());
+        assert!(net.dst_ip().is_none());
+        assert!(net.protocol().is_none());
+    }
+
+    #[test]
+    fn network_header_helpers_ipv4_are_populated() {
+        let raw = make_tcp_ipv4_payload([192, 0, 2, 10], [192, 0, 2, 20], 12000, 443);
+        let parsed = parse_packet_with_linktype(&raw, LinkType::RawIp).unwrap();
+        let net = parsed
+            .network
+            .as_ref()
+            .expect("expected IPv4 network header");
+
+        assert_eq!(net.src_ip(), Some(IpAddr::V4([192, 0, 2, 10].into())));
+        assert_eq!(net.dst_ip(), Some(IpAddr::V4([192, 0, 2, 20].into())));
+        assert_eq!(net.protocol(), Some(IpProtocol::Tcp));
     }
 }
