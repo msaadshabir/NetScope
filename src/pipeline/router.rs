@@ -63,13 +63,13 @@ fn fast_flow_hash_ethernet(data: &[u8]) -> u64 {
     let mut ether_type = u16::from_be_bytes([data[12], data[13]]);
     let mut ip_offset: usize = 14;
 
-    // Skip 802.1Q VLAN tag
-    if ether_type == 0x8100 {
-        if data.len() < 18 {
+    // Skip 802.1Q / 802.1ad VLAN tags (stacked allowed).
+    while ether_type == 0x8100 || ether_type == 0x88A8 {
+        if data.len() < ip_offset + 4 {
             return byte_hash(data);
         }
-        ether_type = u16::from_be_bytes([data[16], data[17]]);
-        ip_offset = 18;
+        ether_type = u16::from_be_bytes([data[ip_offset + 2], data[ip_offset + 3]]);
+        ip_offset += 4;
     }
 
     match ether_type {
@@ -89,13 +89,13 @@ fn fast_flow_hash_linux_sll(data: &[u8]) -> u64 {
     let mut ether_type = u16::from_be_bytes([data[14], data[15]]);
     let mut ip_offset: usize = 16;
 
-    // Optional 802.1Q VLAN tag in the payload.
-    if ether_type == 0x8100 {
-        if data.len() < 20 {
+    // Optional 802.1Q / 802.1ad VLAN tags in the payload.
+    while ether_type == 0x8100 || ether_type == 0x88A8 {
+        if data.len() < ip_offset + 4 {
             return byte_hash(data);
         }
-        ether_type = u16::from_be_bytes([data[18], data[19]]);
-        ip_offset = 20;
+        ether_type = u16::from_be_bytes([data[ip_offset + 2], data[ip_offset + 3]]);
+        ip_offset += 4;
     }
 
     match ether_type {
@@ -253,6 +253,33 @@ mod tests {
         frame
     }
 
+    fn make_tcp_ipv4_qinq_frame(
+        src_ip: [u8; 4],
+        dst_ip: [u8; 4],
+        src_port: u16,
+        dst_port: u16,
+        outer_vlan: u16,
+        inner_vlan: u16,
+    ) -> Vec<u8> {
+        let mut frame = vec![0u8; 14];
+
+        // Ethernet ethertype 0x88A8 (802.1ad)
+        frame[12] = 0x88;
+        frame[13] = 0xA8;
+
+        // Outer TCI + inner TPID (0x8100)
+        frame.extend_from_slice(&outer_vlan.to_be_bytes());
+        frame.extend_from_slice(&[0x81, 0x00]);
+
+        // Inner TCI + inner EtherType (IPv4)
+        frame.extend_from_slice(&inner_vlan.to_be_bytes());
+        frame.extend_from_slice(&[0x08, 0x00]);
+
+        frame.extend_from_slice(&make_tcp_ipv4_payload(src_ip, dst_ip, src_port, dst_port));
+
+        frame
+    }
+
     fn make_tcp_ipv4_sll_packet(
         src_ip: [u8; 4],
         dst_ip: [u8; 4],
@@ -302,6 +329,17 @@ mod tests {
             shard_ab, shard_ba,
             "both directions of a flow must map to the same shard"
         );
+    }
+
+    #[test]
+    fn qinq_vlan_preserves_shard_routing() {
+        let base = make_tcp_ipv4_frame([10, 2, 0, 1], [10, 2, 0, 2], 22222, 443);
+        let qinq = make_tcp_ipv4_qinq_frame([10, 2, 0, 1], [10, 2, 0, 2], 22222, 443, 100, 200);
+
+        let shard_base = shard_for_packet(&base, 8);
+        let shard_qinq = shard_for_packet(&qinq, 8);
+
+        assert_eq!(shard_base, shard_qinq);
     }
 
     #[test]
