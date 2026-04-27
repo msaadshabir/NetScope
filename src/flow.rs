@@ -668,6 +668,7 @@ impl FlowTracker {
                 ParsedFlowIps::V6(hdr.src_addr(), hdr.dst_addr()),
                 hdr.is_non_initial_fragment(),
             ),
+            Some(NetworkHeader::Arp(_)) => return,
             None => return,
         };
 
@@ -1430,6 +1431,7 @@ pub fn flow_key_from_packet(packet: &ParsedPacket<'_>) -> Option<FlowKey> {
             IpAddr::V6(hdr.dst_addr()),
             hdr.is_non_initial_fragment(),
         ),
+        Some(NetworkHeader::Arp(_)) => return None,
         None => return None,
     };
 
@@ -1611,6 +1613,7 @@ fn tcp_sequence_len(
                     }
                 }
             }
+            NetworkHeader::Arp(_) => {}
         }
     }
 
@@ -1620,8 +1623,28 @@ fn tcp_sequence_len(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{LinkType, parse_packet_with_linktype};
     use std::collections::VecDeque;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    fn make_ethernet_arp_frame() -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x08, 0x06, // EtherType = ARP
+        ];
+
+        frame.extend_from_slice(&1u16.to_be_bytes()); // htype = Ethernet
+        frame.extend_from_slice(&0x0800u16.to_be_bytes()); // ptype = IPv4
+        frame.push(6); // hlen
+        frame.push(4); // plen
+        frame.extend_from_slice(&1u16.to_be_bytes()); // op = request
+        frame.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // sha
+        frame.extend_from_slice(&[192, 168, 1, 10]); // spa
+        frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // tha
+        frame.extend_from_slice(&[192, 168, 1, 1]); // tpa
+        frame
+    }
 
     #[test]
     fn flow_key_is_directionless() {
@@ -1653,6 +1676,32 @@ mod tests {
         assert_eq!(key.a, v4);
         assert_eq!(key.b, v6);
         assert_eq!(dir, FlowDirection::BtoA);
+    }
+
+    #[test]
+    fn flow_key_from_packet_returns_none_for_arp() {
+        let frame = make_ethernet_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+        assert!(flow_key_from_packet(&parsed).is_none());
+    }
+
+    #[test]
+    fn observe_ignores_arp_packets() {
+        let frame = make_ethernet_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+        let mut tracker = FlowTracker::new(60.0, 1024, false, false, false);
+
+        tracker.observe(1.0, frame.len() as u64, &parsed);
+
+        match &tracker.store {
+            FlowStore::Scale {
+                flows_v4, flows_v6, ..
+            } => {
+                assert!(flows_v4.is_empty());
+                assert!(flows_v6.is_empty());
+            }
+            FlowStore::Full(flows) => assert!(flows.is_empty()),
+        }
     }
 
     #[test]

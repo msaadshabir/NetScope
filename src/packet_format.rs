@@ -42,6 +42,12 @@ pub fn summarise_packet(
                 src = format!("{}", hdr.src_addr());
                 dst = format!("{}", hdr.dst_addr());
             }
+            protocol::NetworkHeader::Arp(hdr) => {
+                proto = "ARP".to_string();
+                src = hdr.sender_protocol_display();
+                dst = hdr.target_protocol_display();
+                info = format!("{}", hdr);
+            }
         }
     } else {
         proto = match &parsed.link {
@@ -137,4 +143,48 @@ pub fn format_timestamp(ts: f64) -> String {
     let minutes = (secs % 3600) / 60;
     let seconds = secs % 60;
     format!("{:02}:{:02}:{:02}.{:06}", hours, minutes, seconds, micros)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{LinkType, parse_packet_with_linktype};
+
+    fn make_non_ipv4_arp_frame() -> Vec<u8> {
+        let mut frame = vec![
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst
+            0x00, 0x11, 0x22, 0x33, 0x44, 0x55, // src
+            0x08, 0x06, // EtherType = ARP
+        ];
+
+        frame.extend_from_slice(&1u16.to_be_bytes()); // htype = Ethernet
+        frame.extend_from_slice(&0x86ddu16.to_be_bytes()); // ptype = IPv6
+        frame.push(6); // hlen
+        frame.push(16); // plen
+        frame.extend_from_slice(&1u16.to_be_bytes()); // op = request
+        frame.extend_from_slice(&[0x00, 0x11, 0x22, 0x33, 0x44, 0x55]); // sha
+        frame.extend_from_slice(&[
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x01,
+        ]); // spa
+        frame.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // tha
+        frame.extend_from_slice(&[
+            0x20, 0x01, 0x0d, 0xb8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02,
+        ]); // tpa
+
+        frame
+    }
+
+    #[test]
+    fn summarise_non_ipv4_arp_formats_protocol_addresses_as_hex() {
+        let frame = make_non_ipv4_arp_frame();
+        let parsed = parse_packet_with_linktype(&frame, LinkType::Ethernet).unwrap();
+
+        let (proto, src, dst, info) = summarise_packet(&parsed, None, None);
+        assert_eq!(proto, "ARP");
+        assert_eq!(src, "20:01:0d:b8:00:00:00:00:00:00:00:00:00:00:00:01");
+        assert_eq!(dst, "20:01:0d:b8:00:00:00:00:00:00:00:00:00:00:00:02");
+        assert!(info.contains("who-has"));
+    }
 }

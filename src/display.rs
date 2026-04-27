@@ -32,6 +32,9 @@ fn build_packet_summary_line(
             NetworkHeader::Ipv6(hdr) => {
                 summary.push_str(&format!(" | IPv6: {}", hdr));
             }
+            NetworkHeader::Arp(hdr) => {
+                summary.push_str(&format!(" | ARP: {}", hdr));
+            }
         }
     }
 
@@ -191,6 +194,33 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
                 println!("    Payload Len:  {}", hdr.payload_length());
                 println!("    Traffic Class:{}", hdr.traffic_class());
                 println!("    Flow Label:   0x{:05x}", hdr.flow_label());
+            }
+            NetworkHeader::Arp(hdr) => {
+                println!("  ARP:");
+                println!(
+                    "    Hardware Type:{} ({})",
+                    hdr.hardware_type_label(),
+                    hdr.hardware_type()
+                );
+                println!(
+                    "    Protocol Type:{} (0x{:04x})",
+                    hdr.protocol_type_label(),
+                    hdr.protocol_type()
+                );
+                println!(
+                    "    Address Lens: hlen={} plen={}",
+                    hdr.hardware_len(),
+                    hdr.protocol_len()
+                );
+                println!(
+                    "    Operation:    {} ({})",
+                    hdr.operation(),
+                    hdr.operation_raw()
+                );
+                println!("    Sender HW:    {}", hdr.sender_hardware_display());
+                println!("    Sender Proto: {}", hdr.sender_protocol_display());
+                println!("    Target HW:    {}", hdr.target_hardware_display());
+                println!("    Target Proto: {}", hdr.target_protocol_display());
             }
         }
     }

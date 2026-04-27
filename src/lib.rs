@@ -39,6 +39,7 @@ pub fn maybe_analyze_anomaly(
             std::net::IpAddr::V6(hdr.dst_addr()),
             hdr.is_non_initial_fragment(),
         ),
+        Some(protocol::NetworkHeader::Arp(_)) => return Vec::new(),
         None => return Vec::new(),
     };
 
@@ -253,6 +254,37 @@ fn push_network_layer<'a>(
                         ("Hop Limit".into(), format!("{}", hdr.hop_limit())),
                         ("Payload Length".into(), format!("{}", hdr.payload_length())),
                         ("Flow Label".into(), format!("0x{:05x}", hdr.flow_label())),
+                    ],
+                });
+            }
+            protocol::NetworkHeader::Arp(hdr) => {
+                layers.push(web::messages::LayerDetail {
+                    name: "ARP".into(),
+                    fields: vec![
+                        (
+                            "Hardware Type".into(),
+                            format!("{} ({})", hdr.hardware_type_label(), hdr.hardware_type()),
+                        ),
+                        (
+                            "Protocol Type".into(),
+                            format!(
+                                "{} (0x{:04x})",
+                                hdr.protocol_type_label(),
+                                hdr.protocol_type()
+                            ),
+                        ),
+                        (
+                            "Address Lengths".into(),
+                            format!("hlen={} plen={}", hdr.hardware_len(), hdr.protocol_len()),
+                        ),
+                        (
+                            "Operation".into(),
+                            format!("{} ({})", hdr.operation(), hdr.operation_raw()),
+                        ),
+                        ("Sender Hardware".into(), hdr.sender_hardware_display()),
+                        ("Sender Protocol".into(), hdr.sender_protocol_display()),
+                        ("Target Hardware".into(), hdr.target_hardware_display()),
+                        ("Target Protocol".into(), hdr.target_protocol_display()),
                     ],
                 });
             }
