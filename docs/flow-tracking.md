@@ -12,7 +12,7 @@ Flows are identified by a canonical bidirectional key:
 
 Where each endpoint is `(ip, port)` and endpoints are ordered deterministically (the "smaller" endpoint by `(ip_version, ip_bytes, port)` is always endpoint A). This means packets in both directions of a conversation map to the same flow entry.
 
-Only TCP and UDP flows are tracked. ICMP, ICMPv6, and other protocols are parsed but do not create flow entries.
+Only TCP and UDP flows are tracked. ARP, ICMP, ICMPv6, and other protocols are parsed but do not create flow entries.
 
 For memory-sensitive runs, NetScope also has an internal scale-mode storage path. When `analysis.rtt`, `analysis.retrans`, and `analysis.out_of_order` are all disabled, flows are stored in compact split IPv4/IPv6 tables and omit deep TCP sequence-tracking state. This switch is automatic and is driven entirely by those three analysis toggles.
 

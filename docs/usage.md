@@ -32,6 +32,14 @@ sudo netscope -f "udp port 53" -c 20
 
 For per-packet DNS detail output, use `-vv`.
 
+Capture ARP traffic with decoded ARP request/reply summaries:
+
+```bash
+sudo netscope -f "arp" -c 20
+```
+
+For per-packet ARP detail output, use `-vv`.
+
 Capture TLS handshakes and show ClientHello SNI in packet summaries/details:
 
 ```bash

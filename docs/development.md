@@ -36,6 +36,7 @@ netscope/
     protocol/
       mod.rs                    # Packet parsing entry point, ParsedPacket type
       ethernet.rs               # Ethernet II header parser
+      arp.rs                    # ARP parser (variable-length addresses)
       loopback.rs               # Loopback NULL/LOOP header parser
       sll.rs                    # Linux cooked capture (SLL) header parser
       ipv4.rs                   # IPv4 header parser (with checksum verification)
