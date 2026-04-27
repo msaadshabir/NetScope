@@ -105,7 +105,7 @@ pub fn build_packet_data(
     push_link_layer(&mut layers, &parsed.link);
 
     // VLAN
-    push_vlan_layer(&mut layers, parsed.vlan.as_ref());
+    push_vlan_layer(&mut layers, parsed.vlan_stack.as_ref());
 
     // Network
     push_network_layer(&mut layers, parsed.network.as_ref());
@@ -192,16 +192,59 @@ fn push_link_layer<'a>(
     }
 }
 
-fn push_vlan_layer(layers: &mut Vec<web::messages::LayerDetail>, vlan: Option<&protocol::VlanTag>) {
+fn vlan_tag_kind(tag_type: protocol::EtherType) -> Option<&'static str> {
+    match tag_type {
+        protocol::EtherType::VlanTagged => Some("802.1Q"),
+        protocol::EtherType::VlanService => Some("802.1ad"),
+        _ => None,
+    }
+}
+
+fn vlan_layer_name(idx: usize, tag_type: protocol::EtherType, total: usize) -> String {
+    let kind = vlan_tag_kind(tag_type);
+    if total == 1 {
+        match kind {
+            Some(kind) => format!("VLAN ({})", kind),
+            None => "VLAN".to_string(),
+        }
+    } else {
+        match kind {
+            Some(kind) => format!("VLAN Tag {} ({})", idx + 1, kind),
+            None => format!("VLAN Tag {}", idx + 1),
+        }
+    }
+}
+
+fn push_vlan_layer(
+    layers: &mut Vec<web::messages::LayerDetail>,
+    vlan: Option<&protocol::VlanStack>,
+) {
     if let Some(vlan) = vlan {
-        layers.push(web::messages::LayerDetail {
-            name: "VLAN (802.1Q)".into(),
-            fields: vec![
-                ("VLAN ID".into(), format!("{}", vlan.vlan_id)),
-                ("Priority".into(), format!("{}", vlan.priority)),
-                ("DEI".into(), format!("{}", vlan.dei)),
-            ],
-        });
+        let tags = vlan.as_slice();
+        if tags.is_empty() {
+            return;
+        }
+
+        for (idx, (tag, tag_type)) in tags.iter().zip(vlan.tag_types().iter()).enumerate() {
+            layers.push(web::messages::LayerDetail {
+                name: vlan_layer_name(idx, *tag_type, tags.len()),
+                fields: vec![
+                    ("VLAN ID".into(), format!("{}", tag.vlan_id)),
+                    ("Priority".into(), format!("{}", tag.priority)),
+                    ("DEI".into(), format!("{}", tag.dei)),
+                ],
+            });
+        }
+
+        if vlan.is_truncated() {
+            layers.push(web::messages::LayerDetail {
+                name: "VLAN Tags".into(),
+                fields: vec![(
+                    "Truncated".into(),
+                    format!("true (max {})", protocol::VLAN_STACK_CAPACITY),
+                )],
+            });
+        }
     }
 }
 

@@ -19,8 +19,20 @@ fn build_packet_summary_line(
     let mut summary = format!("#{:<6} {} Link: {}", index, ts, packet.link);
 
     // VLAN info
-    if let Some(vlan) = &packet.vlan {
-        summary.push_str(&format!(" VLAN:{}", vlan.vlan_id));
+    if let Some(vlan) = &packet.vlan_stack {
+        let tags = vlan.as_slice();
+        if !tags.is_empty() {
+            summary.push_str(" VLAN:");
+            for (idx, tag) in tags.iter().enumerate() {
+                if idx > 0 {
+                    summary.push('/');
+                }
+                summary.push_str(&tag.vlan_id.to_string());
+            }
+            if vlan.is_truncated() {
+                summary.push_str(" (truncated)");
+            }
+        }
     }
 
     // Network layer
@@ -145,11 +157,20 @@ pub fn print_packet_detail(index: u64, timestamp: f64, raw_data: &[u8], packet: 
         }
     }
 
-    if let Some(vlan) = &packet.vlan {
-        println!("  VLAN:");
-        println!("    ID:       {}", vlan.vlan_id);
-        println!("    Priority: {}", vlan.priority);
-        println!("    DEI:      {}", vlan.dei);
+    if let Some(vlan) = &packet.vlan_stack {
+        let tags = vlan.as_slice();
+        if !tags.is_empty() {
+            println!("  VLAN:");
+            for (idx, tag) in tags.iter().enumerate() {
+                println!("    Tag {}:", idx + 1);
+                println!("      ID:       {}", tag.vlan_id);
+                println!("      Priority: {}", tag.priority);
+                println!("      DEI:      {}", tag.dei);
+            }
+            if vlan.is_truncated() {
+                println!("    (truncated)");
+            }
+        }
     }
 
     // Network layer details
