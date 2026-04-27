@@ -100,11 +100,11 @@ For dashboard endpoints, live update behavior, and tuning guidance, see [Web Das
 
 ## Supported Protocols
 
-| Layer     | Protocols                                                              |
-| --------- | ---------------------------------------------------------------------- |
-| Link      | Ethernet II (incl. 802.1Q VLAN), Linux SLL, loopback NULL/LOOP, raw IP |
-| Network   | ARP, IPv4 (with checksum verification), IPv6                           |
-| Transport | TCP, UDP, ICMP, ICMPv6                                                 |
+| Layer     | Protocols                                                                            |
+| --------- | ------------------------------------------------------------------------------------ |
+| Link      | Ethernet II (incl. 802.1Q VLAN, 802.1ad QinQ), Linux SLL, loopback NULL/LOOP, raw IP |
+| Network   | ARP, IPv4 (with checksum verification), IPv6                                         |
+| Transport | TCP, UDP, ICMP, ICMPv6                                                               |
 
 **Known limitations:**
 

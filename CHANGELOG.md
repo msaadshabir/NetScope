@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - TLS ClientHello SNI extraction in CLI packet views and the web packet inspector (best-effort, packet-level; no TCP reassembly; ECH can hide SNI).
 - ICMPv6 parsing in CLI packet views and the web packet inspector.
 - ARP parsing in CLI packet views and the web packet inspector.
+- QinQ (802.1ad) stacked VLAN support (TPID `0x88A8`) for double-tagged frames in CLI and web packet details.
 - Vendored Chart.js for the embedded web dashboard so charts render in offline/airgapped environments (no CDN runtime dependency).
 - Web dashboard hardening: optional HTTPS (`web.tls.*` / `--web-tls`) and HTTP Basic auth (`web.auth.*` / `--web-auth`).
 - Non-Ethernet packet parsing for Linux cooked capture (SLL), loopback NULL/LOOP, and raw IP datalink captures.
