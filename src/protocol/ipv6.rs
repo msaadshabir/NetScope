@@ -22,7 +22,7 @@ use std::net::Ipv6Addr;
 /// IPv6 fixed header length
 pub const IPV6_HEADER_LEN: usize = 40;
 
-const MAX_EXTENSION_HEADERS: usize = 8;
+const MAX_EXTENSION_HEADERS: usize = 16;
 
 /// Located transport payload information for an IPv6 packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +38,9 @@ pub struct Ipv6PayloadInfo {
 }
 
 /// Walk common IPv6 extension headers and locate transport payload.
+///
+/// The walk is bounded (currently 16 headers) to avoid pathological chains
+/// on the capture thread.
 ///
 /// Returns `None` when the fixed IPv6 header is missing.
 #[inline]
@@ -282,6 +285,25 @@ mod tests {
         pkt
     }
 
+    fn make_ipv6_dest_opts_chain(eh_count: usize, tcp_len: usize) -> Vec<u8> {
+        let payload_len = eh_count * 8 + tcp_len;
+        let mut pkt = vec![0u8; IPV6_HEADER_LEN + payload_len];
+        pkt[0] = 0x60;
+        pkt[4..6].copy_from_slice(&(payload_len as u16).to_be_bytes());
+        pkt[6] = 60; // Destination Options
+        pkt[7] = 64;
+        pkt[23] = 1;
+        pkt[39] = 2;
+
+        for i in 0..eh_count {
+            let offset = IPV6_HEADER_LEN + i * 8;
+            pkt[offset] = if i + 1 == eh_count { 6 } else { 60 };
+            pkt[offset + 1] = 0; // Hdr Ext Len = 0 => 8 bytes total
+        }
+
+        pkt
+    }
+
     #[test]
     fn parse_valid_ipv6() {
         let pkt = make_ipv6_header();
@@ -321,6 +343,18 @@ mod tests {
     }
 
     #[test]
+    fn parse_ipv6_deep_dest_opts_chain_to_tcp() {
+        let eh_count = 9; // Exceeds the old limit of 8
+        let tcp_len = 20;
+        let pkt = make_ipv6_dest_opts_chain(eh_count, tcp_len);
+
+        let hdr = Ipv6Header::parse(&pkt).unwrap();
+        assert_eq!(hdr.next_header_raw(), 6);
+        assert_eq!(hdr.transport_offset(), IPV6_HEADER_LEN + eh_count * 8);
+        assert_eq!(hdr.payload().len(), tcp_len);
+    }
+
+    #[test]
     fn parse_ipv6_non_initial_fragment() {
         // Fixed header + Fragment(8) + fragment payload(12)
         let mut pkt = vec![0u8; 40 + 8 + 12];
@@ -354,6 +388,21 @@ mod tests {
         assert_eq!(info.next_header, 0);
         assert_eq!(info.transport_offset, 40);
         assert_eq!(info.payload_end, 41);
+        assert!(!info.non_initial_fragment);
+    }
+
+    #[test]
+    fn locate_payload_stops_at_depth_limit() {
+        let tcp_len = 20;
+        let pkt = make_ipv6_dest_opts_chain(MAX_EXTENSION_HEADERS + 1, tcp_len);
+        let info = locate_ipv6_payload(&pkt).unwrap();
+
+        assert_eq!(info.next_header, 60);
+        assert_eq!(
+            info.transport_offset,
+            IPV6_HEADER_LEN + MAX_EXTENSION_HEADERS * 8
+        );
+        assert_eq!(info.payload_end, pkt.len());
         assert!(!info.non_initial_fragment);
     }
 
