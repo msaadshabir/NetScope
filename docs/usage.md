@@ -116,6 +116,12 @@ Write continuously expired or evicted flows to JSONL:
 sudo netscope --expired-flows-jsonl expired-flows.jsonl --flow-timeout-s 10
 ```
 
+Write continuously expired or evicted flows to CSV:
+
+```bash
+sudo netscope --expired-flows-csv expired-flows.csv --flow-timeout-s 10
+```
+
 ## Web Dashboard
 
 Start the web dashboard:
@@ -181,6 +187,12 @@ Pipeline mode with alert and expired-flow JSONL outputs:
 
 ```bash
 sudo netscope --pipeline --anomalies --alerts-jsonl alerts.jsonl --expired-flows-jsonl expired-flows.jsonl --quiet --stats
+```
+
+Pipeline mode with expired-flow CSV output:
+
+```bash
+sudo netscope --pipeline --expired-flows-csv expired-flows.csv --quiet --stats
 ```
 
 See [Sharded Pipeline](pipeline.md) for architecture details and tuning.

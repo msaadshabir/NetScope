@@ -36,13 +36,14 @@ Use [CLI Reference](cli-reference.md) for flag-level help and this page for the 
 
 ## Path Fields
 
-In TOML, path fields (`capture.read_pcap`, `write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `alerts_jsonl`, `web.tls.cert_path`, `web.tls.key_path`, `web.auth.password_file`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
+In TOML, path fields (`capture.read_pcap`, `write_pcap`, `export_json`, `export_csv`, `expired_flows_jsonl`, `expired_flows_csv`, `alerts_jsonl`, `web.tls.cert_path`, `web.tls.key_path`, `web.auth.password_file`) accept file paths. Setting a path to an empty string (`""`) is treated as disabled -- equivalent to omitting the key entirely.
 
 ```toml
 [output]
 write_pcap = ""     # disabled
 export_json = ""    # disabled
 expired_flows_jsonl = "" # disabled
+expired_flows_csv = "" # disabled
 ```
 
 ## Config Reference
@@ -78,6 +79,7 @@ Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If bot
 | `export_json`          | path | (none)  | Export flow table to JSON on exit.                                                                   |
 | `export_csv`           | path | (none)  | Export flow table to CSV on exit.                                                                    |
 | `expired_flows_jsonl`  | path | (none)  | Write expired or evicted flows as JSON lines during capture.                                         |
+| `expired_flows_csv`    | path | (none)  | Write expired or evicted flows as streaming CSV during capture.                                      |
 | `hex_dump`             | bool | `false` | Show hex dump of each packet.                                                                        |
 | `quiet`                | bool | `false` | Suppress per-packet terminal output.                                                                 |
 

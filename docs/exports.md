@@ -164,3 +164,25 @@ Each line is a standalone JSON object with `reason` (`"timeout"` or `"eviction"`
   "rtt_samples": 5
 }
 ```
+
+## Expired Flow Export (CSV)
+
+Write continuously expired or evicted flows to a CSV file:
+
+```bash
+sudo netscope --expired-flows-csv expired-flows.csv
+```
+
+The CSV stream includes a header row. Columns are `ts` and `reason` followed by the standard flow CSV columns:
+
+```
+ts,reason,protocol,endpoint_a_ip,endpoint_a_port,endpoint_b_ip,endpoint_b_port,first_seen,last_seen,duration_secs,packets_a_to_b,packets_b_to_a,bytes_a_to_b,bytes_b_to_a,packets_total,bytes_total,avg_bps,tcp_state,client,retransmissions,out_of_order,rtt_last_ms,rtt_min_ms,rtt_ewma_ms,rtt_samples
+```
+
+Example row:
+
+```
+1706123500.250000,timeout,tcp,10.0.0.5,51514,10.0.0.10,443,1706123492.110000,1706123498.980000,6.870000,12,9,1640,9020,21,10660,12417.170,established,a_to_b,0,0,2.100,1.800,2.000,5
+```
+
+The CSV output uses the same plain comma-separated formatting as the flow table export (no quoting/escaping). The header is written once if the file is empty; appending to an existing file does not repeat the header.
