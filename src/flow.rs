@@ -9,7 +9,7 @@ use std::net::IpAddr;
 mod export;
 mod key;
 
-pub use export::{write_flow_csv, write_flow_json};
+pub use export::{ExpiredFlowCsvSink, write_flow_csv, write_flow_json};
 pub(crate) use key::{CompactFlowKey, FlowKeyV4, FlowKeyV6};
 pub use key::{Endpoint, FlowDirection, FlowKey, FlowProtocol};
 
@@ -504,6 +504,15 @@ pub struct FlowSnapshot {
 pub enum ExpiredFlowReason {
     Timeout,
     Eviction,
+}
+
+impl ExpiredFlowReason {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ExpiredFlowReason::Timeout => "timeout",
+            ExpiredFlowReason::Eviction => "eviction",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

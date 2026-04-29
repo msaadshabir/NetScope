@@ -23,6 +23,7 @@ write_pcap_max_files = 0  # keep newest N rotated segments; requires rotate_mb >
 export_json = ""
 export_csv = ""
 expired_flows_jsonl = ""
+expired_flows_csv = ""
 hex_dump = false
 quiet = false
 

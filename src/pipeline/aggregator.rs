@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::flow::{ExpiredFlowEvent, FlowDelta, FlowSnapshot};
+use crate::flow::{ExpiredFlowCsvSink, ExpiredFlowEvent, FlowDelta, FlowSnapshot};
 use crate::jsonl::JsonlSink;
 use crate::metrics;
 use crate::web::messages::{AlertMsg, CaptureEvent, FlowInfo, StatsTick};
@@ -133,6 +133,7 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
         tick_deadline_ms,
         alerts_jsonl,
         expired_flows_jsonl,
+        expired_flows_csv,
     } = config;
 
     let num_workers = handle.inner.lock().unwrap().num_workers;
@@ -143,6 +144,8 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
     let mut tick_start = Instant::now();
     let mut alert_sink = open_sink(alerts_jsonl.as_deref(), "alerts jsonl");
     let mut expired_flow_sink = open_sink(expired_flows_jsonl.as_deref(), "expired flows jsonl");
+    let mut expired_flow_csv_sink =
+        open_expired_flow_csv_sink(expired_flows_csv.as_deref(), "expired flows csv");
     let mut prev_kernel_totals: Option<(u64, u64)> = None;
 
     loop {
@@ -216,7 +219,11 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                     }
                 }
                 WorkerEvent::ExpiredFlows(events) => {
-                    write_expired_flows_to_jsonl(&mut expired_flow_sink, events);
+                    write_expired_flows(
+                        &mut expired_flow_sink,
+                        &mut expired_flow_csv_sink,
+                        events,
+                    );
                 }
                 WorkerEvent::Shutdown(shutdown) => {
                     let mut state = handle.inner.lock().unwrap();
@@ -267,6 +274,7 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                     &web_event_tx,
                     &mut alert_sink,
                     &mut expired_flow_sink,
+                    &mut expired_flow_csv_sink,
                 );
                 break;
             }
@@ -286,6 +294,7 @@ pub struct AggregatorRunConfig {
     pub tick_deadline_ms: u64,
     pub alerts_jsonl: Option<PathBuf>,
     pub expired_flows_jsonl: Option<PathBuf>,
+    pub expired_flows_csv: Option<PathBuf>,
 }
 
 /// Drain all remaining events from the channel, handling each one.
@@ -297,6 +306,7 @@ fn drain_channel(
     web_event_tx: &Option<mpsc::Sender<CaptureEvent>>,
     alert_sink: &mut Option<JsonlSink>,
     expired_flow_sink: &mut Option<JsonlSink>,
+    expired_flow_csv_sink: &mut Option<ExpiredFlowCsvSink>,
 ) {
     while let Ok(event) = rx.try_recv() {
         match event {
@@ -316,7 +326,7 @@ fn drain_channel(
                 }
             }
             WorkerEvent::ExpiredFlows(events) => {
-                write_expired_flows_to_jsonl(expired_flow_sink, events);
+                write_expired_flows(expired_flow_sink, expired_flow_csv_sink, events);
             }
             WorkerEvent::Packet(sample) => {
                 if let Some(tx) = web_event_tx {
@@ -455,6 +465,22 @@ fn open_sink(path: Option<&std::path::Path>, label: &str) -> Option<JsonlSink> {
     }
 }
 
+fn open_expired_flow_csv_sink(
+    path: Option<&std::path::Path>,
+    label: &str,
+) -> Option<ExpiredFlowCsvSink> {
+    match path {
+        Some(path) => match ExpiredFlowCsvSink::new(path) {
+            Ok(sink) => Some(sink),
+            Err(err) => {
+                eprintln!("{} disabled: {}", label, err);
+                None
+            }
+        },
+        None => None,
+    }
+}
+
 fn write_alert_to_jsonl(sink: &mut Option<JsonlSink>, alert: &AlertMsg) {
     let record = serde_json::json!({
         "ts": alert.ts,
@@ -472,15 +498,33 @@ fn write_alert_to_jsonl(sink: &mut Option<JsonlSink>, alert: &AlertMsg) {
     }
 }
 
-fn write_expired_flows_to_jsonl(sink: &mut Option<JsonlSink>, events: Vec<ExpiredFlowEvent>) {
-    if let Some(sink) = sink.as_mut() {
-        for event in events {
-            if let Err(err) = sink.write(&event) {
+fn write_expired_flows(
+    jsonl_sink: &mut Option<JsonlSink>,
+    csv_sink: &mut Option<ExpiredFlowCsvSink>,
+    events: Vec<ExpiredFlowEvent>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    if let Some(sink) = jsonl_sink.as_mut() {
+        for event in &events {
+            if let Err(err) = sink.write(event) {
                 eprintln!("expired flow write error: {}", err);
             }
         }
         if let Err(err) = sink.flush() {
             eprintln!("expired flow flush error: {}", err);
+        }
+    }
+
+    if let Some(sink) = csv_sink.as_mut() {
+        for event in &events {
+            if let Err(err) = sink.write(event) {
+                eprintln!("expired flow csv write error: {}", err);
+            }
+        }
+        if let Err(err) = sink.flush() {
+            eprintln!("expired flow csv flush error: {}", err);
         }
     }
 }
@@ -542,6 +586,7 @@ mod tests {
                 tick_deadline_ms: 10,
                 alerts_jsonl: None,
                 expired_flows_jsonl: None,
+                expired_flows_csv: None,
             };
             run(rx, thread_handle, config);
         });
@@ -585,6 +630,7 @@ mod tests {
                 tick_deadline_ms: 10,
                 alerts_jsonl: None,
                 expired_flows_jsonl: None,
+                expired_flows_csv: None,
             };
             run(rx, thread_handle, config);
         });

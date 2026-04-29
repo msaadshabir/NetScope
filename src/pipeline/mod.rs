@@ -157,6 +157,8 @@ pub struct PipelineConfig {
     pub alerts_jsonl: Option<PathBuf>,
     /// Pipeline expired-flow JSONL file sink path.
     pub expired_flows_jsonl: Option<PathBuf>,
+    /// Pipeline expired-flow CSV file sink path.
+    pub expired_flows_csv: Option<PathBuf>,
     /// Shared kernel/libpcap drop counters.
     pub kernel_stats: Arc<KernelPcapStats>,
     /// Capture datalink type (applies to all packets in this run).
@@ -227,7 +229,8 @@ pub fn spawn(
     let buffer_returner = buffer_pool.returner();
     let stats = Arc::new(PipelineStats::new());
     let kernel_stats = config.kernel_stats.clone();
-    let emit_expired_flows = config.expired_flows_jsonl.is_some();
+    let emit_expired_flows =
+        config.expired_flows_jsonl.is_some() || config.expired_flows_csv.is_some();
 
     for shard_id in 0..num_workers {
         let (pkt_tx, pkt_rx) = bounded::<OwnedPacket>(config.channel_capacity);
@@ -283,6 +286,7 @@ pub fn spawn(
     let kernel_stats_clone = kernel_stats.clone();
     let alerts_jsonl = config.alerts_jsonl.clone();
     let expired_flows_jsonl = config.expired_flows_jsonl.clone();
+    let expired_flows_csv = config.expired_flows_csv.clone();
 
     let aggregator_thread = thread::Builder::new()
         .name("ns-aggregator".into())
@@ -296,6 +300,7 @@ pub fn spawn(
                 tick_deadline_ms,
                 alerts_jsonl,
                 expired_flows_jsonl,
+                expired_flows_csv,
             };
             aggregator::run(agg_rx, agg_handle_clone, run_cfg);
         })

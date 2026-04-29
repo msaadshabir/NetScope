@@ -757,22 +757,35 @@ fn unix_secs_now() -> f64 {
         .as_secs_f64()
 }
 
-fn flush_expired_flows_jsonl(
-    sink: &mut Option<netscope::jsonl::JsonlSink>,
+fn flush_expired_flows(
+    jsonl_sink: &mut Option<netscope::jsonl::JsonlSink>,
+    csv_sink: &mut Option<flow::ExpiredFlowCsvSink>,
     events: &mut Vec<flow::ExpiredFlowEvent>,
 ) {
     if events.is_empty() {
         return;
     }
     let drained = std::mem::take(events);
-    if let Some(sink) = sink.as_mut() {
-        for event in drained {
-            if let Err(err) = sink.write(&event) {
+
+    if let Some(sink) = jsonl_sink.as_mut() {
+        for event in &drained {
+            if let Err(err) = sink.write(event) {
                 eprintln!("expired flow write error: {}", err);
             }
         }
         if let Err(err) = sink.flush() {
             eprintln!("expired flow flush error: {}", err);
+        }
+    }
+
+    if let Some(sink) = csv_sink.as_mut() {
+        for event in &drained {
+            if let Err(err) = sink.write(event) {
+                eprintln!("expired flow csv write error: {}", err);
+            }
+        }
+        if let Err(err) = sink.flush() {
+            eprintln!("expired flow csv flush error: {}", err);
         }
     }
 }
@@ -811,6 +824,17 @@ fn run_capture_inline(
         },
         None => None,
     };
+    let mut expired_flow_csv_sink = match config.output.expired_flows_csv.as_deref() {
+        Some(path) => match flow::ExpiredFlowCsvSink::new(path) {
+            Ok(sink) => Some(sink),
+            Err(err) => {
+                eprintln!("expired flow csv disabled: {}", err);
+                None
+            }
+        },
+        None => None,
+    };
+    let emit_expired_flows = expired_flow_sink.is_some() || expired_flow_csv_sink.is_some();
     let mut expired_flow_events: Vec<flow::ExpiredFlowEvent> = Vec::new();
     let mut last_expire_check_ts: f64 = 0.0;
 
@@ -946,9 +970,13 @@ fn run_capture_inline(
                 last_expire_check_ts = timestamp;
             } else if (timestamp - last_expire_check_ts) >= 1.0 {
                 last_expire_check_ts = timestamp;
-                if expired_flow_sink.is_some() {
+                if emit_expired_flows {
                     flow_tracker.maybe_expire_collect(timestamp, &mut expired_flow_events);
-                    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
+                    flush_expired_flows(
+                        &mut expired_flow_sink,
+                        &mut expired_flow_csv_sink,
+                        &mut expired_flow_events,
+                    );
                 } else {
                     flow_tracker.maybe_expire(timestamp);
                 }
@@ -959,9 +987,13 @@ fn run_capture_inline(
                 last_expire_check_ts = now_ts;
             } else if (now_ts - last_expire_check_ts) >= 1.0 {
                 last_expire_check_ts = now_ts;
-                if expired_flow_sink.is_some() {
+                if emit_expired_flows {
                     flow_tracker.maybe_expire_collect(now_ts, &mut expired_flow_events);
-                    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
+                    flush_expired_flows(
+                        &mut expired_flow_sink,
+                        &mut expired_flow_csv_sink,
+                        &mut expired_flow_events,
+                    );
                 } else {
                     flow_tracker.maybe_expire(now_ts);
                 }
@@ -1094,7 +1126,11 @@ fn run_capture_inline(
         }
     }
 
-    flush_expired_flows_jsonl(&mut expired_flow_sink, &mut expired_flow_events);
+    flush_expired_flows(
+        &mut expired_flow_sink,
+        &mut expired_flow_csv_sink,
+        &mut expired_flow_events,
+    );
 
     if let Err(err) = flush_savefile(&mut savefile) {
         tracing::error!(error = %err, "pcap flush error");
@@ -1161,6 +1197,7 @@ fn run_capture_pipeline(
         heavy_hitter_top_n: config.web.top_n.max(config.stats.top_flows as usize),
         alerts_jsonl: config.analysis.alerts_jsonl.clone(),
         expired_flows_jsonl: config.output.expired_flows_jsonl.clone(),
+        expired_flows_csv: config.output.expired_flows_csv.clone(),
         kernel_stats: kernel_stats.clone(),
         link_type,
     };
@@ -1429,6 +1466,13 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
             output.expired_flows_jsonl = None;
         } else {
             output.expired_flows_jsonl = Some(value.clone());
+        }
+    }
+    if let Some(value) = &args.expired_flows_csv {
+        if value.as_os_str().is_empty() {
+            output.expired_flows_csv = None;
+        } else {
+            output.expired_flows_csv = Some(value.clone());
         }
     }
 
