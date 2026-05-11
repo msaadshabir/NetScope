@@ -9,6 +9,12 @@ pub struct ExpiredFlowCsvSink {
     writer: BufWriter<File>,
 }
 
+impl std::fmt::Debug for ExpiredFlowCsvSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpiredFlowCsvSink").finish()
+    }
+}
+
 impl ExpiredFlowCsvSink {
     pub fn new(path: &Path) -> Result<Self, std::io::Error> {
         let is_empty = match std::fs::metadata(path) {
