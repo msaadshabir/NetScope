@@ -20,6 +20,7 @@ where
 pub enum ConfigError {
     Io(std::io::Error),
     Parse(toml::de::Error),
+    Validation(String),
 }
 
 impl fmt::Display for ConfigError {
@@ -27,11 +28,20 @@ impl fmt::Display for ConfigError {
         match self {
             ConfigError::Io(err) => write!(f, "config io error: {}", err),
             ConfigError::Parse(err) => write!(f, "config parse error: {}", err),
+            ConfigError::Validation(msg) => write!(f, "config validation error: {}", msg),
         }
     }
 }
 
-impl std::error::Error for ConfigError {}
+impl std::error::Error for ConfigError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ConfigError::Io(err) => Some(err),
+            ConfigError::Parse(err) => Some(err),
+            ConfigError::Validation(_) => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
