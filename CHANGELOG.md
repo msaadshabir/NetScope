@@ -51,7 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - IPv6 extension-header walk depth increased (bounded) to cover deeper valid chains.
 - Packet detail store now uses fixed-size O(1) slot storage keyed by packet id modulo capacity, with stale-id rejection outside the active window.
 - Local perf validation is now captured via `scripts/perf/validate.sh` (release build + representative benchmark + CLI synthetic-flow memory validation).
-- Internal refactors to improve maintainability (flow module split, shared packet formatting helpers).
+- Internal refactors to improve maintainability (flow module split, shared output sinks, shared packet formatting helpers).
 - Flow CSV export avoids per-row string allocations by writing fields directly.
 - Perf helper scripts print `tcpreplay` install hints and removed stale accepted-baseline text.
 

@@ -40,8 +40,8 @@ libpcap buffer sizing and immediate mode are configured through the `[capture]` 
 | `--write-pcap-max-files <N>`   |       | int   | 0       | Keep only the newest `N` rotated pcap segments (delete oldest). Requires `--write-pcap` + `--write-pcap-rotate-mb`. |
 | `--export-json <PATH>`         |       | path  | (none)  | Export the flow table to JSON on exit.                                                                              |
 | `--export-csv <PATH>`          |       | path  | (none)  | Export the flow table to CSV on exit.                                                                               |
-| `--expired-flows-jsonl <PATH>` |       | path  | (none)  | Write expired/evicted flow records as JSON lines.                                                                   |
-| `--expired-flows-csv <PATH>`   |       | path  | (none)  | Write expired/evicted flow records as streaming CSV.                                                                |
+| `--expired-flows-jsonl <PATH>` |       | path  | (none)  | Write expired/evicted flow records as JSON lines (inline and pipeline modes).                                       |
+| `--expired-flows-csv <PATH>`   |       | path  | (none)  | Write expired/evicted flow records as streaming CSV (inline and pipeline modes).                                    |
 
 When rotation is enabled, `--write-pcap` is treated as a base template and NetScope writes numbered segments like `capture.000001.pcap`, `capture.000002.pcap`, and so on (the unsuffixed `capture.pcap` file is not created).
 

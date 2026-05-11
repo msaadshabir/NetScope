@@ -78,8 +78,8 @@ Note: `capture.interface` and `capture.read_pcap` are mutually exclusive. If bot
 | `write_pcap_max_files` | int  | `0`     | Keep only the newest `N` rotated pcap files (delete oldest). Must be `> 0` when rotation is enabled. |
 | `export_json`          | path | (none)  | Export flow table to JSON on exit.                                                                   |
 | `export_csv`           | path | (none)  | Export flow table to CSV on exit.                                                                    |
-| `expired_flows_jsonl`  | path | (none)  | Write expired or evicted flows as JSON lines during capture.                                         |
-| `expired_flows_csv`    | path | (none)  | Write expired or evicted flows as streaming CSV during capture.                                      |
+| `expired_flows_jsonl`  | path | (none)  | Write expired or evicted flows as JSON lines during capture (inline and pipeline modes).             |
+| `expired_flows_csv`    | path | (none)  | Write expired or evicted flows as streaming CSV during capture (inline and pipeline modes).          |
 | `hex_dump`             | bool | `false` | Show hex dump of each packet.                                                                        |
 | `quiet`                | bool | `false` | Suppress per-packet terminal output.                                                                 |
 

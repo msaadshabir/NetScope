@@ -24,10 +24,16 @@ netscope/
     cli.rs                      # Clap CLI argument definitions
     config.rs                   # TOML config structs, defaults, deserialization
     display.rs                  # CLI packet display (summary, detail, hex dump)
-    flow.rs                     # Flow tracking core: entries, tracker, snapshots
+    jsonl.rs                    # JSON Lines sink helper (append-only JSONL writing)
+    sinks.rs                    # Shared output sinks (alerts + expired flows)
+    flow.rs                     # Flow module root: re-exports flow types and helpers
     flow/
-      key.rs                    # Flow key/endpoint/protocol types and compact keys
       export.rs                 # Flow JSON/CSV export helpers
+      key.rs                    # Flow key/endpoint/protocol types and compact keys
+      model.rs                  # Flow entry/snapshot models and TCP state helpers
+      scale.rs                  # Compact scale-mode flow entry representation
+      tcp.rs                    # TCP flags/sequence tracking helpers
+      tracker.rs                # FlowTracker implementation
     packet_format.rs            # Shared packet summary/hex/timestamp formatting helpers
     memory.rs                   # RSS estimation and memory-scale helpers
     capture/
@@ -180,6 +186,12 @@ tracing::info!(interface = %name, "capture started");
 tracing::debug!(error = %e, "parse error on packet #{}", id);
 tracing::trace!(shard, "worker channel full, dropping packet");
 ```
+
+Logging convention:
+
+- Use `println!` for user-facing CLI output.
+- Use `tracing::{error,warn,info,debug,trace}` for logs.
+- Avoid non-interactive `eprintln!` for logging.
 
 ## Docs Maintenance
 

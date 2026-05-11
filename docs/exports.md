@@ -114,6 +114,8 @@ If you need strict CSV quoting/escaping for downstream ingestion, prefer the JSO
 
 Write anomaly alerts to a JSON Lines file:
 
+Works in both inline and pipeline modes.
+
 ```bash
 sudo netscope --anomalies --alerts-jsonl alerts.jsonl
 ```
@@ -130,6 +132,8 @@ See [Anomaly Detection](anomaly-detection.md) for details on alert types and thr
 ## Expired Flow Export (JSONL)
 
 Write continuously expired or evicted flows to a JSON Lines file:
+
+Works in both inline and pipeline modes.
 
 ```bash
 sudo netscope --expired-flows-jsonl expired-flows.jsonl
@@ -168,6 +172,8 @@ Each line is a standalone JSON object with `reason` (`"timeout"` or `"eviction"`
 ## Expired Flow Export (CSV)
 
 Write continuously expired or evicted flows to a CSV file:
+
+Works in both inline and pipeline modes.
 
 ```bash
 sudo netscope --expired-flows-csv expired-flows.csv
