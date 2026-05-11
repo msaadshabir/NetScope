@@ -23,7 +23,7 @@ use axum_server::tls_rustls::RustlsConfig;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use rust_embed::Embed;
 use std::{path::PathBuf, sync::Arc};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{RwLock, broadcast, mpsc};
 
 use super::messages::{
     AlertMsg, CaptureEvent, Frame, PacketDetail, PacketSample, WsClientMsg, WsServerMsg,
@@ -52,10 +52,9 @@ struct Assets;
 pub struct AppState {
     /// Broadcast channel: every connected WS client subscribes here.
     broadcast_tx: broadcast::Sender<BroadcastFrame>,
-    /// Latest merged frame for lag recovery / initial sync.
-    latest_frame: Mutex<Option<BroadcastFrame>>,
+    latest_frame: RwLock<Option<BroadcastFrame>>,
     /// Packet ring buffer for on-demand detail retrieval.
-    pub packet_store: Mutex<PacketStore>,
+    pub packet_store: RwLock<PacketStore>,
     /// Tick interval so we can tell the client in the hello message.
     pub tick_ms: u64,
     /// Optional HTTP Basic auth credentials.
@@ -136,8 +135,8 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
 
     let state = Arc::new(AppState {
         broadcast_tx: broadcast_tx.clone(),
-        latest_frame: Mutex::new(None),
-        packet_store: Mutex::new(PacketStore::new(packet_buffer)),
+        latest_frame: RwLock::new(None),
+        packet_store: RwLock::new(PacketStore::new(packet_buffer)),
         tick_ms,
         basic_auth: auth.map(|auth| BasicAuthCredentials {
             username: auth.username,
@@ -217,7 +216,7 @@ pub fn start(config: WebServerConfig) -> Result<WebHandle, std::io::Error> {
 }
 
 // ---------------------------------------------------------------------------
-// Ingest task: capture events → broadcast + packet store
+// Ingest task: capture events -> broadcast + packet store
 // ---------------------------------------------------------------------------
 
 async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>) {
@@ -240,7 +239,7 @@ async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>)
                 pending_packets.push(sample);
             }
             CaptureEvent::PacketStored(stored) => {
-                let mut store = state.packet_store.lock().await;
+                let mut store = state.packet_store.write().await;
                 store.push(stored);
             }
             CaptureEvent::Alert(alert) => {
@@ -260,25 +259,35 @@ async fn ingest_task(mut rx: mpsc::Receiver<CaptureEvent>, state: Arc<AppState>)
 
 async fn broadcast_frame(state: &Arc<AppState>, frame_seq: u64, frame: Frame) {
     let msg = WsServerMsg::Frame(frame);
-    if let Ok(json) = serde_json::to_string(&msg) {
-        let frame = BroadcastFrame {
-            frame_seq: Some(frame_seq),
-            json: Arc::<str>::from(json),
-        };
-        {
-            let mut latest = state.latest_frame.lock().await;
-            *latest = Some(frame.clone());
+    match serde_json::to_string(&msg) {
+        Ok(json) => {
+            let frame = BroadcastFrame {
+                frame_seq: Some(frame_seq),
+                json: Arc::<str>::from(json),
+            };
+            {
+                let mut latest = state.latest_frame.write().await;
+                *latest = Some(frame.clone());
+            }
+            let _ = state.broadcast_tx.send(frame);
         }
-        let _ = state.broadcast_tx.send(frame);
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to serialize websocket frame");
+        }
     }
 }
 
 async fn broadcast_message(state: &Arc<AppState>, msg: WsServerMsg) {
-    if let Ok(json) = serde_json::to_string(&msg) {
-        let _ = state.broadcast_tx.send(BroadcastFrame {
-            frame_seq: None,
-            json: Arc::<str>::from(json),
-        });
+    match serde_json::to_string(&msg) {
+        Ok(json) => {
+            let _ = state.broadcast_tx.send(BroadcastFrame {
+                frame_seq: None,
+                json: Arc::<str>::from(json),
+            });
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "failed to serialize websocket message");
+        }
     }
 }
 
@@ -380,6 +389,7 @@ fn unauthorized_response() -> Response {
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
+    tracing::info!("ws client connected");
     // Send hello
     let hello = WsServerMsg::Hello {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -388,6 +398,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     if let Ok(json) = serde_json::to_string(&hello)
         && socket.send(Message::Text(json.into())).await.is_err()
     {
+        tracing::debug!("ws client disconnected during hello send");
         return;
     }
 
@@ -396,13 +407,14 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
     let mut last_sent_frame_seq: Option<u64> = None;
 
     // Send the latest frame so newly connected clients start from current state.
-    if let Some(frame) = { state.latest_frame.lock().await.clone() } {
+    if let Some(frame) = { state.latest_frame.read().await.clone() } {
         last_sent_frame_seq = frame.frame_seq;
         if socket
             .send(Message::Text(frame.json.as_ref().to_owned().into()))
             .await
             .is_err()
         {
+            tracing::debug!("ws client disconnected during initial frame send");
             return;
         }
     }
@@ -422,6 +434,7 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                             .await
                             .is_err()
                         {
+                            tracing::debug!("ws client disconnected during broadcast send");
                             break;
                         }
                     }
@@ -430,17 +443,17 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                         // Drop buffered backlog and resume from newest broadcast position.
                         broadcast_rx = state.broadcast_tx.subscribe();
                         // Resync by sending the newest merged frame instead of replaying history.
-                        if let Some(frame) = { state.latest_frame.lock().await.clone() } {
-                            if let Some(seq) = frame.frame_seq
-                                && last_sent_frame_seq == Some(seq) {
-                                    continue;
-                                }
+                        if let Some(frame) = { state.latest_frame.read().await.clone() } {
+                            if !should_send_resync(frame.frame_seq, last_sent_frame_seq) {
+                                continue;
+                            }
                             last_sent_frame_seq = frame.frame_seq.or(last_sent_frame_seq);
                             if socket
                                 .send(Message::Text(frame.json.as_ref().to_owned().into()))
                                 .await
                                 .is_err()
                             {
+                                tracing::debug!("ws client disconnected during lag recovery send");
                                 break;
                             }
                         }
@@ -452,10 +465,10 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
             result = socket.recv() => {
                 match result {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(client_msg) = serde_json::from_str::<WsClientMsg>(&text) {
-                            match client_msg {
+                        match serde_json::from_str::<WsClientMsg>(&text) {
+                            Ok(client_msg) => match client_msg {
                                 WsClientMsg::GetPacketDetail { id } => {
-                                    let store = state.packet_store.lock().await;
+                                    let store = state.packet_store.read().await;
                                     let response = match store.get(id) {
                                         Some(stored) => WsServerMsg::PacketDetail(PacketDetail {
                                             id: stored.id,
@@ -464,13 +477,14 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                             hex_dump: stored.hex_dump.clone(),
                                         }),
                                         None => {
-                                            // Packet no longer in buffer — ignore
+                                            // Packet no longer in buffer -- ignore
                                             continue;
                                         }
                                     };
                                     drop(store);
                                     if let Ok(json) = serde_json::to_string(&response)
                                         && socket.send(Message::Text(json.into())).await.is_err() {
+                                            tracing::debug!("ws client disconnected during packet detail send");
                                             break;
                                         }
                                 }
@@ -485,9 +499,21 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
                                     };
                                     if let Ok(json) = serde_json::to_string(&response)
                                         && socket.send(Message::Text(json.into())).await.is_err() {
+                                            tracing::debug!("ws client disconnected during perf pong send");
                                             break;
                                         }
                                 }
+                            },
+                            Err(err) => {
+                                tracing::debug!(error = %err, "invalid ws client message");
+                                let response = WsServerMsg::Error {
+                                    message: "invalid request".into(),
+                                };
+                                if let Ok(json) = serde_json::to_string(&response)
+                                    && socket.send(Message::Text(json.into())).await.is_err() {
+                                        tracing::debug!("ws client disconnected during error response send");
+                                        break;
+                                    }
                             }
                         }
                     }
@@ -497,12 +523,21 @@ async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
+
+    tracing::info!("ws client disconnected");
 }
 
 fn should_skip_frame(frame_seq: Option<u64>, last_sent_frame_seq: Option<u64>) -> bool {
     match (frame_seq, last_sent_frame_seq) {
         (Some(seq), Some(last_seq)) => seq <= last_seq,
         _ => false,
+    }
+}
+
+fn should_send_resync(latest_frame_seq: Option<u64>, last_sent_frame_seq: Option<u64>) -> bool {
+    match latest_frame_seq {
+        Some(seq) => last_sent_frame_seq != Some(seq),
+        None => true,
     }
 }
 
@@ -562,14 +597,18 @@ mod tests {
         body::Body,
         http::{Request, StatusCode, header},
     };
+    use futures_util::StreamExt;
+    use std::time::Duration;
+    use tokio_tungstenite::tungstenite::Message as WsMessage;
     use tower::util::ServiceExt;
+    use crate::web::messages::StatsTick;
 
     fn test_state(auth: Option<BasicAuthCredentials>) -> Arc<AppState> {
         let (broadcast_tx, _) = broadcast::channel::<BroadcastFrame>(16);
         Arc::new(AppState {
             broadcast_tx,
-            latest_frame: Mutex::new(None),
-            packet_store: Mutex::new(PacketStore::new(8)),
+            latest_frame: RwLock::new(None),
+            packet_store: RwLock::new(PacketStore::new(8)),
             tick_ms: 1000,
             basic_auth: auth,
         })
@@ -578,10 +617,65 @@ mod tests {
     fn test_router(auth: Option<BasicAuthCredentials>) -> Router {
         let state = test_state(auth);
         Router::new()
+            .route("/ws", get(ws_handler))
             .route("/api/health", get(health_handler))
             .route("/metrics", get(metrics_handler))
             .with_state(state.clone())
             .layer(middleware::from_fn_with_state(state, auth_middleware))
+    }
+
+    async fn spawn_ws_server(
+        state: Arc<AppState>,
+    ) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+        let app = Router::new()
+            .route("/ws", get(ws_handler))
+            .with_state(state);
+
+        let listener =
+            std::net::TcpListener::bind("127.0.0.1:0").expect("bind websocket test listener");
+        let addr = listener.local_addr().expect("listener addr");
+        listener
+            .set_nonblocking(true)
+            .expect("listener nonblocking");
+        let server = axum_server::from_tcp(listener).expect("create axum server");
+
+        let handle = tokio::spawn(async move {
+            let _ = server.serve(app.into_make_service()).await;
+        });
+
+        (addr, handle)
+    }
+
+    fn test_tick(frame_seq: u64) -> StatsTick {
+        StatsTick {
+            ts: 0.0,
+            frame_seq,
+            server_ts: 0,
+            interval_ms: 1000,
+            bytes: 0,
+            packets: 0,
+            mbps: 0.0,
+            pps: 0.0,
+            active_flows: 0,
+            dispatch_drops: 0,
+            dispatch_drops_total: 0,
+            kernel_drops: 0,
+            kernel_drops_total: 0,
+            kernel_if_drops: 0,
+            kernel_if_drops_total: 0,
+            top_flows: Vec::new(),
+        }
+    }
+
+    fn ws_upgrade_request() -> Request<Body> {
+        Request::builder()
+            .uri("/ws")
+            .header(header::CONNECTION, "upgrade")
+            .header(header::UPGRADE, "websocket")
+            .header(header::SEC_WEBSOCKET_VERSION, "13")
+            .header(header::SEC_WEBSOCKET_KEY, "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(Body::empty())
+            .expect("request should build")
     }
 
     #[tokio::test]
@@ -696,5 +790,182 @@ mod tests {
             .expect("response body should be readable");
         let body = String::from_utf8(body.to_vec()).expect("response body should be valid utf8");
         assert!(body.contains("netscope_build_info"));
+    }
+
+    #[tokio::test]
+    async fn ws_requires_auth_when_configured() {
+        let app = test_router(Some(BasicAuthCredentials {
+            username: "netscope".into(),
+            password: "secret".into(),
+        }));
+        let request = ws_upgrade_request();
+
+        let response = app.oneshot(request).await.expect("router should respond");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn ws_connection_succeeds_without_auth() {
+        let state = test_state(None);
+        let (addr, server_handle) = spawn_ws_server(state.clone()).await;
+
+        let url = format!("ws://{}/ws", addr);
+        let (mut socket, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("connect websocket");
+
+        let hello = socket.next().await.expect("hello").expect("hello msg");
+        let hello_text = match hello {
+            WsMessage::Text(t) => t,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let hello_json: serde_json::Value =
+            serde_json::from_str(&hello_text).expect("hello json");
+        assert_eq!(hello_json["type"], "hello");
+
+        server_handle.abort();
+    }
+
+    #[test]
+    fn ws_skip_frame_rejects_duplicates() {
+        assert!(should_skip_frame(Some(10), Some(10)));
+        assert!(should_skip_frame(Some(9), Some(10)));
+        assert!(!should_skip_frame(Some(11), Some(10)));
+        assert!(!should_skip_frame(None, Some(10)));
+    }
+
+    #[test]
+    fn ws_resync_skips_duplicate_latest_frame() {
+        assert!(should_send_resync(Some(10), None));
+        assert!(should_send_resync(Some(11), Some(10)));
+        assert!(!should_send_resync(Some(10), Some(10)));
+        assert!(should_send_resync(None, Some(10)));
+    }
+
+    #[tokio::test]
+    async fn ws_happy_path_receives_hello_and_frame() {
+        let state = test_state(None);
+        let (addr, server_handle) = spawn_ws_server(state.clone()).await;
+
+        let url = format!("ws://{}/ws", addr);
+        let (mut socket, _) = tokio_tungstenite::connect_async(url)
+            .await
+            .expect("connect websocket");
+
+        let hello = tokio::time::timeout(Duration::from_secs(1), socket.next())
+            .await
+            .expect("hello timeout")
+            .expect("hello message")
+            .expect("hello result");
+        let hello_text = match hello {
+            WsMessage::Text(text) => text,
+            other => panic!("unexpected hello message: {other:?}"),
+        };
+        let hello_json: serde_json::Value = serde_json::from_str(&hello_text).expect("hello json");
+        assert_eq!(hello_json["type"], "hello");
+
+        let frame_seq = 1;
+        let tick = test_tick(frame_seq);
+        let frame = Frame {
+            frame_seq,
+            tick,
+            packets: Vec::new(),
+            alerts: Vec::new(),
+        };
+        broadcast_frame(&state, frame_seq, frame).await;
+
+        let msg = tokio::time::timeout(Duration::from_secs(1), socket.next())
+            .await
+            .expect("frame timeout")
+            .expect("frame message")
+            .expect("frame result");
+        let frame_text = match msg {
+            WsMessage::Text(text) => text,
+            other => panic!("unexpected frame message: {other:?}"),
+        };
+        let frame_json: serde_json::Value = serde_json::from_str(&frame_text).expect("frame json");
+        assert_eq!(frame_json["type"], "frame");
+        assert_eq!(frame_json["frame_seq"].as_u64(), Some(frame_seq));
+
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn ws_lag_recovery_no_duplicate_after_reconnect() {
+        let state = test_state(None);
+        let (addr, server_handle) = spawn_ws_server(state.clone()).await;
+
+        let url = format!("ws://{}/ws", addr);
+        let (mut socket, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("first connect");
+
+        let _hello = socket.next().await.expect("hello").expect("hello msg");
+
+        let frame1 = Frame {
+            frame_seq: 1,
+            tick: test_tick(1),
+            packets: Vec::new(),
+            alerts: Vec::new(),
+        };
+        broadcast_frame(&state, 1, frame1).await;
+
+        let msg = socket.next().await.expect("frame 1").expect("msg");
+        let text = match msg {
+            WsMessage::Text(t) => t,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).expect("parse");
+        assert_eq!(json["frame_seq"], 1);
+
+        drop(socket);
+
+        let frame2 = Frame {
+            frame_seq: 2,
+            tick: test_tick(2),
+            packets: Vec::new(),
+            alerts: Vec::new(),
+        };
+        broadcast_frame(&state, 2, frame2).await;
+
+        let (mut socket2, _) = tokio_tungstenite::connect_async(&url)
+            .await
+            .expect("reconnect");
+
+        let hello2 = socket2.next().await.expect("hello after reconnect").expect("msg");
+        let hello2_text = match hello2 {
+            WsMessage::Text(t) => t,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let hello2_json: serde_json::Value = serde_json::from_str(&hello2_text).expect("parse");
+        assert_eq!(hello2_json["type"], "hello");
+
+        let resync = socket2.next().await.expect("resync").expect("msg");
+        let resync_text = match resync {
+            WsMessage::Text(t) => t,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let resync_json: serde_json::Value = serde_json::from_str(&resync_text).expect("parse");
+        assert_eq!(resync_json["type"], "frame");
+        assert_eq!(resync_json["frame_seq"], 2);
+
+        let frame3 = Frame {
+            frame_seq: 3,
+            tick: test_tick(3),
+            packets: Vec::new(),
+            alerts: Vec::new(),
+        };
+        broadcast_frame(&state, 3, frame3).await;
+
+        let msg = socket2.next().await.expect("frame 3").expect("msg");
+        let text = match msg {
+            WsMessage::Text(t) => t,
+            other => panic!("unexpected: {other:?}"),
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).expect("parse");
+        assert_eq!(json["frame_seq"], 3);
+
+        server_handle.abort();
     }
 }

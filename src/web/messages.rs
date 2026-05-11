@@ -34,6 +34,9 @@ pub enum WsServerMsg {
 
     /// Response to a client-side performance ping.
     PerfPong { client_ts: u64, server_ts: u64 },
+
+    /// Error response for invalid client messages.
+    Error { message: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
