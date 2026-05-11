@@ -1,6 +1,6 @@
 use crate::config::{AnomalyConfig, PortScanConfig, SynFloodConfig};
 use crate::flow::{Endpoint, FlowProtocol};
-use crate::jsonl::JsonlSink;
+use crate::sinks::AlertJsonlSink;
 use ahash::{AHashMap, AHashSet};
 use std::collections::VecDeque;
 use std::net::IpAddr;
@@ -23,7 +23,7 @@ pub struct AnomalyDetector {
     config: AnomalyConfig,
     syn_flood: SynFloodState,
     port_scan: PortScanState,
-    alert_sink: Option<AlertSink>,
+    alert_sink: Option<AlertJsonlSink>,
     last_cleanup: f64,
 }
 
@@ -31,24 +31,28 @@ pub struct AnomalyDetector {
 const CLEANUP_INTERVAL_SECS: f64 = 30.0;
 
 impl AnomalyDetector {
-    pub fn new(config: AnomalyConfig, alerts_jsonl: Option<&std::path::Path>) -> Self {
-        let alert_sink = match alerts_jsonl {
-            Some(path) => match AlertSink::new(path) {
-                Ok(sink) => Some(sink),
-                Err(err) => {
-                    eprintln!("alert file disabled: {}", err);
-                    None
-                }
-            },
-            None => None,
-        };
+    pub fn new(config: AnomalyConfig) -> Self {
         AnomalyDetector {
             syn_flood: SynFloodState::new(config.syn_flood.clone()),
             port_scan: PortScanState::new(config.port_scan.clone()),
             config,
-            alert_sink,
+            alert_sink: None,
             last_cleanup: 0.0,
         }
+    }
+
+    pub fn new_with_alerts_jsonl(
+        config: AnomalyConfig,
+        path: &std::path::Path,
+    ) -> Result<Self, std::io::Error> {
+        let alert_sink = AlertJsonlSink::open(path)?;
+        Ok(AnomalyDetector {
+            syn_flood: SynFloodState::new(config.syn_flood.clone()),
+            port_scan: PortScanState::new(config.port_scan.clone()),
+            config,
+            alert_sink: Some(alert_sink),
+            last_cleanup: 0.0,
+        })
     }
 
     pub fn observe(
@@ -59,9 +63,9 @@ impl AnomalyDetector {
         dst: Endpoint,
         tcp_syn: bool,
         tcp_ack: bool,
-    ) -> Vec<Alert> {
+    ) -> Result<Vec<Alert>, std::io::Error> {
         if !self.config.enabled {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let mut alerts = Vec::new();
@@ -86,9 +90,7 @@ impl AnomalyDetector {
 
         if let Some(sink) = &mut self.alert_sink {
             for alert in &alerts {
-                if let Err(err) = sink.write(alert) {
-                    eprintln!("alert write error: {}", err);
-                }
+                sink.write_alert(alert.ts, alert.kind.as_str(), &alert.description)?;
             }
         }
 
@@ -99,35 +101,12 @@ impl AnomalyDetector {
             self.last_cleanup = ts;
         }
 
-        alerts
-    }
-}
-
-#[derive(Debug)]
-struct AlertSink {
-    sink: JsonlSink,
-}
-
-impl AlertSink {
-    fn new(path: &std::path::Path) -> Result<Self, std::io::Error> {
-        Ok(AlertSink {
-            sink: JsonlSink::new(path)?,
-        })
-    }
-
-    fn write(&mut self, alert: &Alert) -> Result<(), std::io::Error> {
-        let record = serde_json::json!({
-            "ts": alert.ts,
-            "kind": alert.kind.as_str(),
-            "description": &alert.description,
-        });
-        self.sink.write(&record)?;
-        self.sink.flush()
+        Ok(alerts)
     }
 }
 
 impl AlertKind {
-    fn as_str(&self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             AlertKind::SynFlood => "syn_flood",
             AlertKind::PortScan => "port_scan",

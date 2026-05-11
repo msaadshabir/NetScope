@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod packet_format;
 pub mod pipeline;
 pub mod protocol;
+pub mod sinks;
 pub mod web;
 
 // ---------------------------------------------------------------------------
@@ -24,7 +25,7 @@ pub fn maybe_analyze_anomaly(
     detector: &mut analysis::anomaly::AnomalyDetector,
     ts: f64,
     packet: &protocol::ParsedPacket<'_>,
-) -> Vec<analysis::anomaly::Alert> {
+) -> Result<Vec<analysis::anomaly::Alert>, std::io::Error> {
     let (src_ip, dst_ip, skip_flow) = match &packet.network {
         Some(protocol::NetworkHeader::Ipv4(hdr)) => {
             let skip = hdr.fragment_offset() != 0;
@@ -39,12 +40,12 @@ pub fn maybe_analyze_anomaly(
             std::net::IpAddr::V6(hdr.dst_addr()),
             hdr.is_non_initial_fragment(),
         ),
-        Some(protocol::NetworkHeader::Arp(_)) => return Vec::new(),
-        None => return Vec::new(),
+        Some(protocol::NetworkHeader::Arp(_)) => return Ok(Vec::new()),
+        None => return Ok(Vec::new()),
     };
 
     if skip_flow {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let (src_port, dst_port, proto, tcp_syn, tcp_ack) = match &packet.transport {
@@ -62,7 +63,7 @@ pub fn maybe_analyze_anomaly(
             false,
             false,
         ),
-        _ => return Vec::new(),
+        _ => return Ok(Vec::new()),
     };
 
     let src = flow::Endpoint {

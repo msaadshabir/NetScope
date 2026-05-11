@@ -30,6 +30,7 @@ pub mod worker;
 
 use crate::config::{AnalysisConfig, FlowConfig, StatsConfig, WebConfig};
 use crate::protocol::LinkType;
+use crate::sinks;
 use crate::web;
 use crossbeam_channel::{Sender, bounded};
 use std::path::PathBuf;
@@ -214,23 +215,28 @@ pub fn spawn(
     config: PipelineConfig,
     running: Arc<AtomicBool>,
     web_handle: Option<&web::server::WebHandle>,
-) -> PipelineHandle {
+) -> Result<PipelineHandle, std::io::Error> {
     let num_workers = resolve_num_workers(config.num_workers);
 
     tracing::info!(num_workers, "starting sharded pipeline");
+
+    let output_sinks = sinks::OutputSinks::open(
+        config.alerts_jsonl.as_deref(),
+        config.expired_flows_jsonl.as_deref(),
+        config.expired_flows_csv.as_deref(),
+    );
 
     // Aggregator channel: all workers send events here.
     let (agg_tx, agg_rx) = crossbeam_channel::unbounded::<WorkerEvent>();
 
     // Spawn workers.
     let mut senders = Vec::with_capacity(num_workers);
-    let mut worker_handles = Vec::with_capacity(num_workers);
+    let mut worker_handles: Vec<thread::JoinHandle<()>> = Vec::with_capacity(num_workers);
     let buffer_pool = PacketBufPool::new(config.buffer_pool_capacity, config.packet_buf_size);
     let buffer_returner = buffer_pool.returner();
     let stats = Arc::new(PipelineStats::new());
     let kernel_stats = config.kernel_stats.clone();
-    let emit_expired_flows =
-        config.expired_flows_jsonl.is_some() || config.expired_flows_csv.is_some();
+    let emit_expired_flows = output_sinks.emit_expired_flows();
 
     for shard_id in 0..num_workers {
         let (pkt_tx, pkt_rx) = bounded::<OwnedPacket>(config.channel_capacity);
@@ -244,8 +250,9 @@ pub fn spawn(
         let heavy_hitter_top_n = config.heavy_hitter_top_n;
         let buffer_returner = buffer_returner.clone();
         let link_type = config.link_type;
+        let running_for_worker = running.clone();
 
-        let handle = thread::Builder::new()
+        let handle = match thread::Builder::new()
             .name(format!("ns-worker-{}", shard_id))
             .spawn(move || {
                 let mut w = worker::Worker::new(
@@ -260,9 +267,21 @@ pub fn spawn(
                     },
                     buffer_returner,
                 );
-                w.run(pkt_rx, agg_tx, &running);
-            })
-            .expect("failed to spawn worker thread");
+                w.run(pkt_rx, agg_tx, &running_for_worker);
+            }) {
+            Ok(handle) => handle,
+            Err(err) => {
+                running.store(false, Ordering::SeqCst);
+                senders.clear();
+                for h in worker_handles.drain(..) {
+                    let _ = h.join();
+                }
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!("failed to spawn worker thread {}: {}", shard_id, err),
+                ));
+            }
+        };
 
         worker_handles.push(handle);
     }
@@ -284,29 +303,39 @@ pub fn spawn(
     let tick_deadline_ms = config.web.tick_ms.saturating_add(5).max(1);
     let stats_clone = stats.clone();
     let kernel_stats_clone = kernel_stats.clone();
-    let alerts_jsonl = config.alerts_jsonl.clone();
-    let expired_flows_jsonl = config.expired_flows_jsonl.clone();
-    let expired_flows_csv = config.expired_flows_csv.clone();
+    let running_for_aggregator = running.clone();
 
-    let aggregator_thread = thread::Builder::new()
-        .name("ns-aggregator".into())
-        .spawn(move || {
-            let run_cfg = aggregator::AggregatorRunConfig {
-                web_event_tx,
-                max_top_n,
-                web_top_n,
-                stats: stats_clone,
-                kernel_stats: kernel_stats_clone,
-                tick_deadline_ms,
-                alerts_jsonl,
-                expired_flows_jsonl,
-                expired_flows_csv,
-            };
-            aggregator::run(agg_rx, agg_handle_clone, run_cfg);
-        })
-        .expect("failed to spawn aggregator thread");
+    let aggregator_thread =
+        match thread::Builder::new()
+            .name("ns-aggregator".into())
+            .spawn(move || {
+                let run_cfg = aggregator::AggregatorRunConfig {
+                    web_event_tx,
+                    max_top_n,
+                    web_top_n,
+                    stats: stats_clone,
+                    kernel_stats: kernel_stats_clone,
+                    tick_deadline_ms,
+                    output_sinks,
+                    running: running_for_aggregator,
+                };
+                aggregator::run(agg_rx, agg_handle_clone, run_cfg);
+            }) {
+            Ok(handle) => handle,
+            Err(err) => {
+                running.store(false, Ordering::SeqCst);
+                senders.clear();
+                for h in worker_handles.drain(..) {
+                    let _ = h.join();
+                }
+                return Err(std::io::Error::new(
+                    err.kind(),
+                    format!("failed to spawn aggregator thread: {}", err),
+                ));
+            }
+        };
 
-    PipelineHandle {
+    Ok(PipelineHandle {
         senders,
         aggregator: agg_handle,
         buffer_pool,
@@ -314,7 +343,7 @@ pub fn spawn(
         kernel_stats,
         worker_handles,
         aggregator_handle: Some(aggregator_thread),
-    }
+    })
 }
 
 pub fn resolve_num_workers(configured: usize) -> usize {

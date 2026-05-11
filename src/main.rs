@@ -3,7 +3,7 @@ mod cli;
 use netscope::{
     analysis, capture, config, display, flow, memory, metrics, pipeline, protocol, web,
 };
-use netscope::{build_packet_data, maybe_analyze_anomaly};
+use netscope::{build_packet_data, maybe_analyze_anomaly, sinks};
 
 use clap::Parser;
 use std::collections::VecDeque;
@@ -193,7 +193,7 @@ fn run_capture(
     config: &RuntimeConfig,
     running: &Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    validate_capture_config(config)?;
+    config.validate()?;
     let mut cap = open_capture_source(config)?;
     let link_type = protocol::LinkType::from_pcap_value(cap.get_datalink().0);
     let rotation_policy = PcapRotationPolicy::from_output(&config.output);
@@ -240,38 +240,6 @@ fn run_capture(
     Ok(())
 }
 
-fn validate_capture_config(config: &RuntimeConfig) -> Result<(), Box<dyn std::error::Error>> {
-    if config.capture.interface.is_some() && config.capture.read_pcap.is_some() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "configuration error: capture.interface and capture.read_pcap are mutually exclusive",
-        )
-        .into());
-    }
-
-    let rotate_mb = config.output.write_pcap_rotate_mb;
-    let max_files = config.output.write_pcap_max_files;
-    let rotation_requested = rotate_mb > 0 || max_files > 0;
-    if rotation_requested {
-        if config.output.write_pcap.is_none() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "configuration error: output.write_pcap must be set when pcap rotation is enabled",
-            )
-            .into());
-        }
-        if rotate_mb == 0 || max_files == 0 {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "configuration error: output.write_pcap_rotate_mb and output.write_pcap_max_files must both be > 0 when rotation is enabled",
-            )
-            .into());
-        }
-    }
-
-    Ok(())
-}
-
 fn open_capture_source(
     config: &RuntimeConfig,
 ) -> Result<CaptureSource, Box<dyn std::error::Error>> {
@@ -302,13 +270,6 @@ fn start_web_dashboard(
     if !config.web.enabled {
         return Ok(None);
     }
-
-    config.web.validate().map_err(|err| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("invalid web dashboard config: {}", err),
-        )
-    })?;
 
     let tls = if config.web.tls.enabled {
         Some(web::server::WebServerTlsConfig {
@@ -356,9 +317,7 @@ fn start_web_dashboard(
     };
 
     if auth.is_some() && tls.is_none() {
-        eprintln!(
-            "warning: web auth is enabled without TLS; credentials will be sent in cleartext"
-        );
+        tracing::warn!("web auth is enabled without TLS; credentials will be sent in cleartext");
     }
 
     let server_config = web::server::WebServerConfig {
@@ -758,36 +717,14 @@ fn unix_secs_now() -> f64 {
 }
 
 fn flush_expired_flows(
-    jsonl_sink: &mut Option<netscope::jsonl::JsonlSink>,
-    csv_sink: &mut Option<flow::ExpiredFlowCsvSink>,
+    sinks: &mut sinks::ExpiredFlowSinks,
     events: &mut Vec<flow::ExpiredFlowEvent>,
-) {
+) -> Result<(), std::io::Error> {
     if events.is_empty() {
-        return;
+        return Ok(());
     }
     let drained = std::mem::take(events);
-
-    if let Some(sink) = jsonl_sink.as_mut() {
-        for event in &drained {
-            if let Err(err) = sink.write(event) {
-                eprintln!("expired flow write error: {}", err);
-            }
-        }
-        if let Err(err) = sink.flush() {
-            eprintln!("expired flow flush error: {}", err);
-        }
-    }
-
-    if let Some(sink) = csv_sink.as_mut() {
-        for event in &drained {
-            if let Err(err) = sink.write(event) {
-                eprintln!("expired flow csv write error: {}", err);
-            }
-        }
-        if let Err(err) = sink.flush() {
-            eprintln!("expired flow csv flush error: {}", err);
-        }
-    }
+    sinks.write_events(&drained)
 }
 
 /// Original single-threaded capture loop (no pipeline).
@@ -810,31 +747,14 @@ fn run_capture_inline(
         config.analysis.retrans,
         config.analysis.out_of_order,
     );
-    let mut anomaly_detector = analysis::anomaly::AnomalyDetector::new(
-        config.analysis.anomalies.clone(),
+    let mut output_sinks = sinks::OutputSinks::open(
         config.analysis.alerts_jsonl.as_deref(),
+        config.output.expired_flows_jsonl.as_deref(),
+        config.output.expired_flows_csv.as_deref(),
     );
-    let mut expired_flow_sink = match config.output.expired_flows_jsonl.as_deref() {
-        Some(path) => match netscope::jsonl::JsonlSink::new(path) {
-            Ok(sink) => Some(sink),
-            Err(err) => {
-                eprintln!("expired flow file disabled: {}", err);
-                None
-            }
-        },
-        None => None,
-    };
-    let mut expired_flow_csv_sink = match config.output.expired_flows_csv.as_deref() {
-        Some(path) => match flow::ExpiredFlowCsvSink::new(path) {
-            Ok(sink) => Some(sink),
-            Err(err) => {
-                eprintln!("expired flow csv disabled: {}", err);
-                None
-            }
-        },
-        None => None,
-    };
-    let emit_expired_flows = expired_flow_sink.is_some() || expired_flow_csv_sink.is_some();
+    let emit_expired_flows = output_sinks.emit_expired_flows();
+    let mut anomaly_detector =
+        analysis::anomaly::AnomalyDetector::new(config.analysis.anomalies.clone());
     let mut expired_flow_events: Vec<flow::ExpiredFlowEvent> = Vec::new();
     let mut last_expire_check_ts: f64 = 0.0;
 
@@ -898,8 +818,13 @@ fn run_capture_inline(
                 Ok(parsed) => {
                     if config.analysis.anomalies.enabled {
                         let alerts =
-                            maybe_analyze_anomaly(&mut anomaly_detector, timestamp, &parsed);
+                            maybe_analyze_anomaly(&mut anomaly_detector, timestamp, &parsed)?;
                         for alert in &alerts {
+                            output_sinks.write_alert(
+                                alert.ts,
+                                alert.kind.as_str(),
+                                &alert.description,
+                            )?;
                             println!("[alert] {}", alert.description);
                             // Forward alerts to web dashboard
                             if let Some(handle) = web_handle
@@ -908,7 +833,7 @@ fn run_capture_inline(
                                     .try_send(web::messages::CaptureEvent::Alert(
                                         web::messages::AlertMsg {
                                             ts: alert.ts,
-                                            kind: format!("{:?}", alert.kind),
+                                            kind: alert.kind.as_str().to_string(),
                                             description: alert.description.clone(),
                                         },
                                     ))
@@ -972,11 +897,7 @@ fn run_capture_inline(
                 last_expire_check_ts = timestamp;
                 if emit_expired_flows {
                     flow_tracker.maybe_expire_collect(timestamp, &mut expired_flow_events);
-                    flush_expired_flows(
-                        &mut expired_flow_sink,
-                        &mut expired_flow_csv_sink,
-                        &mut expired_flow_events,
-                    );
+                    flush_expired_flows(&mut output_sinks.expired_flows, &mut expired_flow_events)?;
                 } else {
                     flow_tracker.maybe_expire(timestamp);
                 }
@@ -989,11 +910,7 @@ fn run_capture_inline(
                 last_expire_check_ts = now_ts;
                 if emit_expired_flows {
                     flow_tracker.maybe_expire_collect(now_ts, &mut expired_flow_events);
-                    flush_expired_flows(
-                        &mut expired_flow_sink,
-                        &mut expired_flow_csv_sink,
-                        &mut expired_flow_events,
-                    );
+                    flush_expired_flows(&mut output_sinks.expired_flows, &mut expired_flow_events)?;
                 } else {
                     flow_tracker.maybe_expire(now_ts);
                 }
@@ -1126,11 +1043,7 @@ fn run_capture_inline(
         }
     }
 
-    flush_expired_flows(
-        &mut expired_flow_sink,
-        &mut expired_flow_csv_sink,
-        &mut expired_flow_events,
-    );
+    flush_expired_flows(&mut output_sinks.expired_flows, &mut expired_flow_events)?;
 
     if let Err(err) = flush_savefile(&mut savefile) {
         tracing::error!(error = %err, "pcap flush error");
@@ -1202,7 +1115,7 @@ fn run_capture_pipeline(
         link_type,
     };
 
-    let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle);
+    let mut pipe = pipeline::spawn(pipeline_cfg, running.clone(), web_handle)?;
     let num_workers = pipe.num_workers();
     println!("Pipeline: {} worker shards", num_workers);
     println!();
@@ -1348,6 +1261,10 @@ fn run_capture_pipeline(
     pipe.shutdown();
     capture_result?;
 
+    if let Some(err) = pipe.aggregator.take_fatal_error() {
+        return Err(std::io::Error::new(std::io::ErrorKind::Other, err).into());
+    }
+
     // Print summary
     println!();
     println!("{}", "=".repeat(50));
@@ -1389,6 +1306,141 @@ struct RuntimeConfig {
     verbose_level: u8,
 }
 
+impl RuntimeConfig {
+    fn validate(&self) -> Result<(), config::ConfigError> {
+        if self.capture.interface.is_some() && self.capture.read_pcap.is_some() {
+            return Err(config::ConfigError::Validation(
+                "capture.interface and capture.read_pcap are mutually exclusive".into(),
+            ));
+        }
+
+        if self.capture.snaplen < 0 {
+            return Err(config::ConfigError::Validation(
+                "capture.snaplen must be >= 0".into(),
+            ));
+        }
+
+        if self.capture.timeout_ms < 0 {
+            return Err(config::ConfigError::Validation(
+                "capture.timeout_ms must be >= 0".into(),
+            ));
+        }
+
+        let rotate_mb = self.output.write_pcap_rotate_mb;
+        let max_files = self.output.write_pcap_max_files;
+        let rotation_requested = rotate_mb > 0 || max_files > 0;
+        if rotation_requested {
+            if self.output.write_pcap.is_none() {
+                return Err(config::ConfigError::Validation(
+                    "output.write_pcap must be set when pcap rotation is enabled".into(),
+                ));
+            }
+            if rotate_mb == 0 || max_files == 0 {
+                return Err(config::ConfigError::Validation(
+                    "output.write_pcap_rotate_mb and output.write_pcap_max_files must both be > 0 when rotation is enabled".into(),
+                ));
+            }
+        }
+
+        if !self.flow.timeout_secs.is_finite() || self.flow.timeout_secs < 0.0 {
+            return Err(config::ConfigError::Validation(
+                "flow.timeout_secs must be >= 0".into(),
+            ));
+        }
+
+        if self.pipeline.enabled && self.pipeline.channel_capacity == 0 {
+            return Err(config::ConfigError::Validation(
+                "pipeline.channel_capacity must be > 0".into(),
+            ));
+        }
+
+        if self.analysis.anomalies.enabled {
+            let syn = &self.analysis.anomalies.syn_flood;
+            if syn.enabled {
+                if !syn.window_secs.is_finite() || syn.window_secs <= 0.0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.syn_flood.window_secs must be > 0".into(),
+                    ));
+                }
+                if syn.syn_threshold == 0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.syn_flood.syn_threshold must be > 0".into(),
+                    ));
+                }
+                if syn.unique_src_threshold == 0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.syn_flood.unique_src_threshold must be > 0".into(),
+                    ));
+                }
+                if !syn.cooldown_secs.is_finite() || syn.cooldown_secs < 0.0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.syn_flood.cooldown_secs must be >= 0".into(),
+                    ));
+                }
+            }
+
+            let scan = &self.analysis.anomalies.port_scan;
+            if scan.enabled {
+                if !scan.window_secs.is_finite() || scan.window_secs <= 0.0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.port_scan.window_secs must be > 0".into(),
+                    ));
+                }
+                if scan.unique_ports_threshold == 0 && scan.unique_hosts_threshold == 0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.port_scan must set at least one non-zero threshold"
+                            .into(),
+                    ));
+                }
+                if !scan.cooldown_secs.is_finite() || scan.cooldown_secs < 0.0 {
+                    return Err(config::ConfigError::Validation(
+                        "analysis.anomalies.port_scan.cooldown_secs must be >= 0".into(),
+                    ));
+                }
+            }
+        }
+
+        if self.web.enabled {
+            self.web
+                .validate()
+                .map_err(config::ConfigError::Validation)?;
+        }
+
+        Ok(())
+    }
+}
+
+fn override_value<T: Clone>(dst: &mut T, src: &Option<T>) {
+    if let Some(value) = src {
+        *dst = value.clone();
+    }
+}
+
+fn override_option<T: Clone>(dst: &mut Option<T>, src: &Option<T>) {
+    if let Some(value) = src {
+        *dst = Some(value.clone());
+    }
+}
+
+fn override_clearable_path(dst: &mut Option<PathBuf>, src: &Option<PathBuf>) {
+    if let Some(value) = src {
+        if value.as_os_str().is_empty() {
+            *dst = None;
+        } else {
+            *dst = Some(value.clone());
+        }
+    }
+}
+
+fn override_bool(dst: &mut bool, enable: bool, disable: bool) {
+    if enable {
+        *dst = true;
+    }
+    if disable {
+        *dst = false;
+    }
+}
+
 fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
     let base = match &args.config {
         Some(path) => config::Config::load(path)?,
@@ -1415,138 +1467,45 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
             capture.interface = None;
         }
     }
-    if let Some(value) = &args.filter {
-        capture.filter = Some(value.clone());
-    }
-    if let Some(value) = args.count {
-        run.count = value;
-    }
-    if let Some(value) = args.snaplen {
-        capture.snaplen = value;
-    }
-    if let Some(value) = args.timeout_ms {
-        capture.timeout_ms = value;
-    }
-    if let Some(value) = args.stats_interval_ms {
-        stats.interval_ms = value;
-    }
-    if let Some(value) = args.top_flows {
-        stats.top_flows = value;
-    }
-    if let Some(value) = args.flow_timeout_s {
-        flow.timeout_secs = value;
-    }
-    if let Some(value) = args.max_flows {
-        flow.max_flows = value;
-    }
-    if let Some(value) = &args.write_pcap {
-        output.write_pcap = Some(value.clone());
-    }
-    if let Some(value) = args.write_pcap_rotate_mb {
-        output.write_pcap_rotate_mb = value;
-    }
-    if let Some(value) = args.write_pcap_max_files {
-        output.write_pcap_max_files = value;
-    }
-    if let Some(value) = &args.export_json {
-        output.export_json = Some(value.clone());
-    }
-    if let Some(value) = &args.export_csv {
-        output.export_csv = Some(value.clone());
-    }
-    if let Some(value) = &args.alerts_jsonl {
-        if value.as_os_str().is_empty() {
-            analysis.alerts_jsonl = None;
-        } else {
-            analysis.alerts_jsonl = Some(value.clone());
-        }
-    }
-    if let Some(value) = &args.expired_flows_jsonl {
-        if value.as_os_str().is_empty() {
-            output.expired_flows_jsonl = None;
-        } else {
-            output.expired_flows_jsonl = Some(value.clone());
-        }
-    }
-    if let Some(value) = &args.expired_flows_csv {
-        if value.as_os_str().is_empty() {
-            output.expired_flows_csv = None;
-        } else {
-            output.expired_flows_csv = Some(value.clone());
-        }
-    }
+    override_option(&mut capture.filter, &args.filter);
+    override_value(&mut run.count, &args.count);
+    override_value(&mut capture.snaplen, &args.snaplen);
+    override_value(&mut capture.timeout_ms, &args.timeout_ms);
+    override_value(&mut stats.interval_ms, &args.stats_interval_ms);
+    override_value(&mut stats.top_flows, &args.top_flows);
+    override_value(&mut flow.timeout_secs, &args.flow_timeout_s);
+    override_value(&mut flow.max_flows, &args.max_flows);
+    override_option(&mut output.write_pcap, &args.write_pcap);
+    override_value(&mut output.write_pcap_rotate_mb, &args.write_pcap_rotate_mb);
+    override_value(&mut output.write_pcap_max_files, &args.write_pcap_max_files);
+    override_option(&mut output.export_json, &args.export_json);
+    override_option(&mut output.export_csv, &args.export_csv);
+    override_clearable_path(&mut analysis.alerts_jsonl, &args.alerts_jsonl);
+    override_clearable_path(&mut output.expired_flows_jsonl, &args.expired_flows_jsonl);
+    override_clearable_path(&mut output.expired_flows_csv, &args.expired_flows_csv);
 
-    if args.promiscuous {
-        capture.promiscuous = true;
-    }
-    if args.no_promiscuous {
-        capture.promiscuous = false;
-    }
-    if args.hex_dump {
-        output.hex_dump = true;
-    }
-    if args.no_hex_dump {
-        output.hex_dump = false;
-    }
-    if args.quiet {
-        output.quiet = true;
-    }
-    if args.no_quiet {
-        output.quiet = false;
-    }
-    if args.stats {
-        stats.enabled = true;
-    }
-    if args.no_stats {
-        stats.enabled = false;
-    }
-    if args.anomalies {
-        analysis.anomalies.enabled = true;
-    }
-    if args.no_anomalies {
-        analysis.anomalies.enabled = false;
-    }
-    if args.web {
-        web.enabled = true;
-    }
-    if args.no_web {
-        web.enabled = false;
-    }
-    if let Some(value) = &args.web_bind {
-        web.bind = value.clone();
-    }
-    if let Some(value) = args.web_port {
-        web.port = value;
-    }
-    if args.web_tls {
-        web.tls.enabled = true;
-    }
-    if args.no_web_tls {
-        web.tls.enabled = false;
-    }
-    if let Some(value) = &args.web_tls_cert {
-        if value.as_os_str().is_empty() {
-            web.tls.cert_path = None;
-        } else {
-            web.tls.cert_path = Some(value.clone());
-        }
-    }
-    if let Some(value) = &args.web_tls_key {
-        if value.as_os_str().is_empty() {
-            web.tls.key_path = None;
-        } else {
-            web.tls.key_path = Some(value.clone());
-        }
-    }
-    if args.web_auth {
-        web.auth.enabled = true;
-    }
-    if args.no_web_auth {
-        web.auth.enabled = false;
-    }
-    if let Some(value) = &args.web_auth_user {
-        web.auth.username = value.clone();
-    }
+    override_bool(
+        &mut capture.promiscuous,
+        args.promiscuous,
+        args.no_promiscuous,
+    );
+    override_bool(&mut output.hex_dump, args.hex_dump, args.no_hex_dump);
+    override_bool(&mut output.quiet, args.quiet, args.no_quiet);
+    override_bool(&mut stats.enabled, args.stats, args.no_stats);
+    override_bool(
+        &mut analysis.anomalies.enabled,
+        args.anomalies,
+        args.no_anomalies,
+    );
+    override_bool(&mut web.enabled, args.web, args.no_web);
+
+    override_value(&mut web.bind, &args.web_bind);
+    override_value(&mut web.port, &args.web_port);
+    override_bool(&mut web.tls.enabled, args.web_tls, args.no_web_tls);
+    override_clearable_path(&mut web.tls.cert_path, &args.web_tls_cert);
+    override_clearable_path(&mut web.tls.key_path, &args.web_tls_key);
+    override_bool(&mut web.auth.enabled, args.web_auth, args.no_web_auth);
+    override_value(&mut web.auth.username, &args.web_auth_user);
     if let Some(value) = &args.web_auth_pass_file {
         if value.as_os_str().is_empty() {
             web.auth.password_file = None;
@@ -1577,4 +1536,95 @@ fn load_config(args: &cli::Cli) -> Result<RuntimeConfig, config::ConfigError> {
         pipeline,
         verbose_level: args.verbose,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn empty_cli() -> cli::Cli {
+        cli::Cli::parse_from(["netscope"])
+    }
+
+    fn write_temp_config(contents: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be valid")
+            .as_nanos();
+        let pid = std::process::id();
+        path.push(format!("netscope-test-{}-{}.toml", pid, ts));
+        fs::write(&path, contents).expect("config should be written");
+        path
+    }
+
+    #[test]
+    fn cli_clearable_paths_override_config() {
+        let path = write_temp_config(
+            r#"
+[analysis]
+alerts_jsonl = "alerts.jsonl"
+
+[output]
+expired_flows_jsonl = "expired.jsonl"
+"#,
+        );
+
+        let mut args = empty_cli();
+        args.config = Some(path.clone());
+        args.alerts_jsonl = Some(PathBuf::from(""));
+        args.expired_flows_jsonl = Some(PathBuf::from(""));
+
+        let cfg = load_config(&args).expect("config should load");
+
+        assert!(cfg.analysis.alerts_jsonl.is_none());
+        assert!(cfg.output.expired_flows_jsonl.is_none());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn validation_skips_web_when_disabled() {
+        let mut cfg = load_config(&empty_cli()).expect("config should load");
+        cfg.web.enabled = false;
+        cfg.web.auth.enabled = true;
+        cfg.web.auth.username = "".into();
+        cfg.web.auth.password = None;
+        cfg.web.auth.password_file = None;
+
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_rotation_without_write_pcap() {
+        let mut cfg = load_config(&empty_cli()).expect("config should load");
+        cfg.output.write_pcap_rotate_mb = 10;
+        cfg.output.write_pcap_max_files = 2;
+        cfg.output.write_pcap = None;
+
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_zero_pipeline_channel_capacity() {
+        let mut cfg = load_config(&empty_cli()).expect("config should load");
+        cfg.pipeline.enabled = true;
+        cfg.pipeline.channel_capacity = 0;
+
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validation_rejects_invalid_port_scan_thresholds() {
+        let mut cfg = load_config(&empty_cli()).expect("config should load");
+        cfg.analysis.anomalies.enabled = true;
+        cfg.analysis.anomalies.port_scan.enabled = true;
+        cfg.analysis.anomalies.port_scan.unique_ports_threshold = 0;
+        cfg.analysis.anomalies.port_scan.unique_hosts_threshold = 0;
+
+        assert!(cfg.validate().is_err());
+    }
 }

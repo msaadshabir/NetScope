@@ -2,16 +2,15 @@
 //! statistics, and forwards results to the CLI and web dashboard.
 
 use crossbeam_channel::Receiver;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-use crate::flow::{ExpiredFlowCsvSink, ExpiredFlowEvent, FlowDelta, FlowSnapshot};
-use crate::jsonl::JsonlSink;
+use crate::flow::{FlowDelta, FlowSnapshot};
 use crate::metrics;
-use crate::web::messages::{AlertMsg, CaptureEvent, FlowInfo, StatsTick};
+use crate::sinks::OutputSinks;
+use crate::web::messages::{CaptureEvent, FlowInfo, StatsTick};
 
 use super::worker::{ShardShutdown, ShardTick, WorkerEvent};
 use super::{KernelPcapStats, PipelineStats};
@@ -84,6 +83,8 @@ struct AggregatorState {
     alert_count: u64,
     /// Per-shard final snapshots collected on shutdown.
     shard_snapshots: Vec<Option<Vec<FlowSnapshot>>>,
+    /// Fatal error that should terminate capture.
+    fatal_error: Option<String>,
 }
 
 impl AggregatorHandle {
@@ -94,6 +95,7 @@ impl AggregatorHandle {
                 latest_tick: None,
                 alert_count: 0,
                 shard_snapshots: vec![None; num_workers],
+                fatal_error: None,
             })),
         }
     }
@@ -120,6 +122,11 @@ impl AggregatorHandle {
         all.sort_by(|a, b| b.bytes_total.cmp(&a.bytes_total));
         all
     }
+
+    /// Take the fatal error, if any.
+    pub fn take_fatal_error(&self) -> Option<String> {
+        self.inner.lock().unwrap().fatal_error.take()
+    }
 }
 
 /// Run the aggregator loop. This blocks until all worker senders disconnect.
@@ -131,9 +138,8 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
         stats,
         kernel_stats,
         tick_deadline_ms,
-        alerts_jsonl,
-        expired_flows_jsonl,
-        expired_flows_csv,
+        mut output_sinks,
+        running,
     } = config;
 
     let num_workers = handle.inner.lock().unwrap().num_workers;
@@ -142,10 +148,6 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
     // Accumulate partial shard ticks, then merge once all shards have reported.
     let mut pending_ticks: Vec<Option<ShardTick>> = vec![None; num_workers];
     let mut tick_start = Instant::now();
-    let mut alert_sink = open_sink(alerts_jsonl.as_deref(), "alerts jsonl");
-    let mut expired_flow_sink = open_sink(expired_flows_jsonl.as_deref(), "expired flows jsonl");
-    let mut expired_flow_csv_sink =
-        open_expired_flow_csv_sink(expired_flows_csv.as_deref(), "expired flows csv");
     let mut prev_kernel_totals: Option<(u64, u64)> = None;
 
     loop {
@@ -196,38 +198,24 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                         tick_start = Instant::now();
                     }
                 }
-                WorkerEvent::Packet(sample) => {
-                    if let Some(tx) = &web_event_tx {
-                        let _ = tx.try_send(CaptureEvent::Packet(sample));
+                _ => {
+                    if let Err(err) = handle_event(
+                        event,
+                        &handle,
+                        &web_event_tx,
+                        &mut output_sinks,
+                        DrainMode::Full,
+                    ) {
+                        handle_fatal_error(&handle, &running, err, "event handling failed");
+                        let _ = drain_channel(
+                            &rx,
+                            &handle,
+                            &web_event_tx,
+                            &mut output_sinks,
+                            DrainMode::ShutdownOnly,
+                        );
+                        break;
                     }
-                }
-                WorkerEvent::PacketStored(stored) => {
-                    if let Some(tx) = &web_event_tx {
-                        let _ = tx.try_send(CaptureEvent::PacketStored(stored));
-                    }
-                }
-                WorkerEvent::Alert(alert) => {
-                    {
-                        let mut state = handle.inner.lock().unwrap();
-                        state.alert_count += 1;
-                    }
-                    write_alert_to_jsonl(&mut alert_sink, &alert);
-                    // Print to CLI
-                    println!("[alert] {}", alert.description);
-                    if let Some(tx) = &web_event_tx {
-                        let _ = tx.try_send(CaptureEvent::Alert(alert));
-                    }
-                }
-                WorkerEvent::ExpiredFlows(events) => {
-                    write_expired_flows(
-                        &mut expired_flow_sink,
-                        &mut expired_flow_csv_sink,
-                        events,
-                    );
-                }
-                WorkerEvent::Shutdown(shutdown) => {
-                    let mut state = handle.inner.lock().unwrap();
-                    record_shutdown_snapshot(&mut state, shutdown);
                 }
             },
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
@@ -268,14 +256,15 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                 // All workers have dropped their senders — drain whatever
                 // remains in the channel before exiting so that Shutdown
                 // events (and their flow snapshots) are not lost.
-                drain_channel(
+                if let Err(err) = drain_channel(
                     &rx,
                     &handle,
                     &web_event_tx,
-                    &mut alert_sink,
-                    &mut expired_flow_sink,
-                    &mut expired_flow_csv_sink,
-                );
+                    &mut output_sinks,
+                    DrainMode::Full,
+                ) {
+                    handle_fatal_error(&handle, &running, err, "failed while draining events");
+                }
                 break;
             }
         }
@@ -284,7 +273,6 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
     tracing::debug!("aggregator shut down");
 }
 
-#[derive(Clone)]
 pub struct AggregatorRunConfig {
     pub web_event_tx: Option<mpsc::Sender<CaptureEvent>>,
     pub max_top_n: usize,
@@ -292,57 +280,87 @@ pub struct AggregatorRunConfig {
     pub stats: Arc<PipelineStats>,
     pub kernel_stats: Arc<KernelPcapStats>,
     pub tick_deadline_ms: u64,
-    pub alerts_jsonl: Option<PathBuf>,
-    pub expired_flows_jsonl: Option<PathBuf>,
-    pub expired_flows_csv: Option<PathBuf>,
+    pub output_sinks: OutputSinks,
+    pub running: Arc<AtomicBool>,
 }
 
-/// Drain all remaining events from the channel, handling each one.
-/// Called on both the `Timeout+!running` and `Disconnected` shutdown paths
-/// so that final `Shutdown` snapshots and in-flight alerts are never dropped.
+enum DrainMode {
+    Full,
+    ShutdownOnly,
+}
+
+impl Clone for DrainMode {
+    fn clone(&self) -> Self {
+        match self {
+            DrainMode::Full => DrainMode::Full,
+            DrainMode::ShutdownOnly => DrainMode::ShutdownOnly,
+        }
+    }
+}
+
+fn handle_event(
+    event: WorkerEvent,
+    handle: &AggregatorHandle,
+    web_event_tx: &Option<mpsc::Sender<CaptureEvent>>,
+    output_sinks: &mut OutputSinks,
+    mode: DrainMode,
+) -> Result<(), std::io::Error> {
+    if let DrainMode::ShutdownOnly = mode {
+        if !matches!(event, WorkerEvent::Shutdown(_)) {
+            return Ok(());
+        }
+    }
+
+    match event {
+        WorkerEvent::Shutdown(shutdown) => {
+            let mut state = handle.inner.lock().unwrap();
+            record_shutdown_snapshot(&mut state, shutdown);
+        }
+        WorkerEvent::Alert(alert) => {
+            {
+                let mut state = handle.inner.lock().unwrap();
+                state.alert_count += 1;
+            }
+            output_sinks.write_alert(alert.ts, &alert.kind, &alert.description)?;
+            println!("[alert] {}", alert.description);
+            if let Some(tx) = web_event_tx {
+                let _ = tx.try_send(CaptureEvent::Alert(alert));
+            }
+        }
+        WorkerEvent::ExpiredFlows(events) => {
+            output_sinks.write_expired_flows(&events)?;
+        }
+        WorkerEvent::Packet(sample) => {
+            if let Some(tx) = web_event_tx {
+                let _ = tx.try_send(CaptureEvent::Packet(sample));
+            }
+        }
+        WorkerEvent::PacketStored(stored) => {
+            if let Some(tx) = web_event_tx {
+                let _ = tx.try_send(CaptureEvent::PacketStored(stored));
+            }
+        }
+        WorkerEvent::ShardTick(_) => {}
+    }
+
+    Ok(())
+}
+
+/// Drain all remaining events from the channel.
+/// Used during normal shutdown and fatal-error paths to collect final
+/// snapshots (and optionally flush sinks).
 fn drain_channel(
     rx: &Receiver<WorkerEvent>,
     handle: &AggregatorHandle,
     web_event_tx: &Option<mpsc::Sender<CaptureEvent>>,
-    alert_sink: &mut Option<JsonlSink>,
-    expired_flow_sink: &mut Option<JsonlSink>,
-    expired_flow_csv_sink: &mut Option<ExpiredFlowCsvSink>,
-) {
+    output_sinks: &mut OutputSinks,
+    mode: DrainMode,
+) -> Result<(), std::io::Error> {
     while let Ok(event) = rx.try_recv() {
-        match event {
-            WorkerEvent::Shutdown(shutdown) => {
-                let mut state = handle.inner.lock().unwrap();
-                record_shutdown_snapshot(&mut state, shutdown);
-            }
-            WorkerEvent::Alert(alert) => {
-                {
-                    let mut state = handle.inner.lock().unwrap();
-                    state.alert_count += 1;
-                }
-                write_alert_to_jsonl(alert_sink, &alert);
-                println!("[alert] {}", alert.description);
-                if let Some(tx) = web_event_tx {
-                    let _ = tx.try_send(CaptureEvent::Alert(alert));
-                }
-            }
-            WorkerEvent::ExpiredFlows(events) => {
-                write_expired_flows(expired_flow_sink, expired_flow_csv_sink, events);
-            }
-            WorkerEvent::Packet(sample) => {
-                if let Some(tx) = web_event_tx {
-                    let _ = tx.try_send(CaptureEvent::Packet(sample));
-                }
-            }
-            WorkerEvent::PacketStored(stored) => {
-                if let Some(tx) = web_event_tx {
-                    let _ = tx.try_send(CaptureEvent::PacketStored(stored));
-                }
-            }
-            // ShardTick events at shutdown are not merged into a final tick;
-            // the data they contain would produce a misleadingly short interval.
-            WorkerEvent::ShardTick(_) => {}
-        }
+        handle_event(event, handle, web_event_tx, output_sinks, mode.clone())?;
     }
+
+    Ok(())
 }
 
 fn record_shutdown_snapshot(state: &mut AggregatorState, shutdown: ShardShutdown) {
@@ -362,6 +380,20 @@ fn record_shutdown_snapshot(state: &mut AggregatorState, shutdown: ShardShutdown
     state.shard_snapshots[shutdown.shard_id] = Some(shutdown.flows);
 }
 
+fn handle_fatal_error(
+    handle: &AggregatorHandle,
+    running: &AtomicBool,
+    err: std::io::Error,
+    context: &str,
+) {
+    tracing::error!(error = %err, context, "fatal pipeline error");
+    let mut state = handle.inner.lock().unwrap();
+    if state.fatal_error.is_none() {
+        state.fatal_error = Some(format!("{}: {}", context, err));
+    }
+    running.store(false, Ordering::SeqCst);
+}
+
 fn merge_ticks(
     pending: &mut [Option<ShardTick>],
     elapsed_secs: f64,
@@ -372,7 +404,8 @@ fn merge_ticks(
     let mut total_bytes: u64 = 0;
     let mut total_packets: u64 = 0;
     let mut total_active_flows: usize = 0;
-    let mut all_top_flows: Vec<(FlowDelta, FlowSnapshot)> = Vec::new();
+    let mut all_top_flows: Vec<(FlowDelta, FlowSnapshot)> =
+        Vec::with_capacity(pending.len().saturating_mul(max_top_n.max(1)));
 
     for slot in pending.iter_mut() {
         if let Some(tick) = slot.take() {
@@ -452,89 +485,13 @@ fn unix_ms_now() -> u64 {
         .as_millis() as u64
 }
 
-fn open_sink(path: Option<&std::path::Path>, label: &str) -> Option<JsonlSink> {
-    match path {
-        Some(path) => match JsonlSink::new(path) {
-            Ok(sink) => Some(sink),
-            Err(err) => {
-                eprintln!("{} disabled: {}", label, err);
-                None
-            }
-        },
-        None => None,
-    }
-}
-
-fn open_expired_flow_csv_sink(
-    path: Option<&std::path::Path>,
-    label: &str,
-) -> Option<ExpiredFlowCsvSink> {
-    match path {
-        Some(path) => match ExpiredFlowCsvSink::new(path) {
-            Ok(sink) => Some(sink),
-            Err(err) => {
-                eprintln!("{} disabled: {}", label, err);
-                None
-            }
-        },
-        None => None,
-    }
-}
-
-fn write_alert_to_jsonl(sink: &mut Option<JsonlSink>, alert: &AlertMsg) {
-    let record = serde_json::json!({
-        "ts": alert.ts,
-        "kind": &alert.kind,
-        "description": &alert.description,
-    });
-    if let Some(sink) = sink.as_mut() {
-        if let Err(err) = sink.write(&record) {
-            eprintln!("alert write error: {}", err);
-            return;
-        }
-        if let Err(err) = sink.flush() {
-            eprintln!("alert flush error: {}", err);
-        }
-    }
-}
-
-fn write_expired_flows(
-    jsonl_sink: &mut Option<JsonlSink>,
-    csv_sink: &mut Option<ExpiredFlowCsvSink>,
-    events: Vec<ExpiredFlowEvent>,
-) {
-    if events.is_empty() {
-        return;
-    }
-    if let Some(sink) = jsonl_sink.as_mut() {
-        for event in &events {
-            if let Err(err) = sink.write(event) {
-                eprintln!("expired flow write error: {}", err);
-            }
-        }
-        if let Err(err) = sink.flush() {
-            eprintln!("expired flow flush error: {}", err);
-        }
-    }
-
-    if let Some(sink) = csv_sink.as_mut() {
-        for event in &events {
-            if let Err(err) = sink.write(event) {
-                eprintln!("expired flow csv write error: {}", err);
-            }
-        }
-        if let Err(err) = sink.flush() {
-            eprintln!("expired flow csv flush error: {}", err);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::flow::{Endpoint, FlowProtocol};
     use crate::pipeline::KernelPcapStats;
     use crate::pipeline::worker::ShardShutdown;
+    use std::sync::atomic::AtomicBool;
 
     fn test_snapshot(seed: u16) -> FlowSnapshot {
         FlowSnapshot {
@@ -574,6 +531,7 @@ mod tests {
         let handle = AggregatorHandle::new(2);
         let stats = Arc::new(PipelineStats::new());
         let kernel_stats = Arc::new(KernelPcapStats::new());
+        let running = Arc::new(AtomicBool::new(true));
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
@@ -584,9 +542,8 @@ mod tests {
                 stats,
                 kernel_stats,
                 tick_deadline_ms: 10,
-                alerts_jsonl: None,
-                expired_flows_jsonl: None,
-                expired_flows_csv: None,
+                output_sinks: OutputSinks::open(None, None, None),
+                running,
             };
             run(rx, thread_handle, config);
         });
@@ -618,6 +575,7 @@ mod tests {
         let handle = AggregatorHandle::new(2);
         let stats = Arc::new(PipelineStats::new());
         let kernel_stats = Arc::new(KernelPcapStats::new());
+        let running = Arc::new(AtomicBool::new(true));
         let thread_handle = handle.clone();
 
         let join = std::thread::spawn(move || {
@@ -628,9 +586,8 @@ mod tests {
                 stats,
                 kernel_stats,
                 tick_deadline_ms: 10,
-                alerts_jsonl: None,
-                expired_flows_jsonl: None,
-                expired_flows_csv: None,
+                output_sinks: OutputSinks::open(None, None, None),
+                running,
             };
             run(rx, thread_handle, config);
         });

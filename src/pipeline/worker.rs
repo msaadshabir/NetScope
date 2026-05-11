@@ -61,6 +61,7 @@ pub struct Worker {
     emit_expired_flows: bool,
     expired_flows_buf: Vec<ExpiredFlowEvent>,
     last_expire_check_ts: f64,
+    agg_send_failed: bool,
     // Per-tick accumulators
     tick_bytes: u64,
     tick_packets: u64,
@@ -97,11 +98,7 @@ impl Worker {
             analysis_cfg.retrans,
             analysis_cfg.out_of_order,
         );
-        let anomaly_detector = AnomalyDetector::new(
-            analysis_cfg.anomalies.clone(),
-            // Workers don't write alert files directly; alerts go through the aggregator.
-            None,
-        );
+        let anomaly_detector = AnomalyDetector::new(analysis_cfg.anomalies.clone());
 
         Worker {
             shard_id,
@@ -116,6 +113,7 @@ impl Worker {
             emit_expired_flows,
             expired_flows_buf: Vec::new(),
             last_expire_check_ts: 0.0,
+            agg_send_failed: false,
             tick_bytes: 0,
             tick_packets: 0,
             tick_next: Instant::now() + tick_interval,
@@ -137,6 +135,10 @@ impl Worker {
                     let owned = std::mem::take(&mut pkt.data);
                     self.buffer_returner.release(owned);
                 }
+                break;
+            }
+
+            if self.agg_send_failed {
                 break;
             }
 
@@ -185,14 +187,28 @@ impl Worker {
             Ok(parsed) => {
                 // Anomaly detection
                 if self.analysis_cfg.anomalies.enabled {
-                    let alerts =
-                        crate::maybe_analyze_anomaly(&mut self.anomaly_detector, pkt.ts, &parsed);
-                    for alert in alerts {
-                        let _ = agg_tx.send(WorkerEvent::Alert(AlertMsg {
-                            ts: alert.ts,
-                            kind: format!("{:?}", alert.kind),
-                            description: alert.description,
-                        }));
+                    match crate::maybe_analyze_anomaly(&mut self.anomaly_detector, pkt.ts, &parsed)
+                    {
+                        Ok(alerts) => {
+                            for alert in alerts {
+                                if self
+                                    .send_event(
+                                        agg_tx,
+                                        WorkerEvent::Alert(AlertMsg {
+                                            ts: alert.ts,
+                                            kind: alert.kind.as_str().to_string(),
+                                            description: alert.description,
+                                        }),
+                                    )
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            tracing::error!(error = %err, "anomaly detector failed");
+                        }
                     }
                 }
 
@@ -220,8 +236,18 @@ impl Worker {
                         &parsed,
                         self.web_cfg.payload_bytes,
                     );
-                    let _ = agg_tx.send(WorkerEvent::Packet(sample));
-                    let _ = agg_tx.send(WorkerEvent::PacketStored(stored));
+                    if self
+                        .send_event(agg_tx, WorkerEvent::Packet(sample))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if self
+                        .send_event(agg_tx, WorkerEvent::PacketStored(stored))
+                        .is_err()
+                    {
+                        return;
+                    }
                 }
 
                 // Flow expiration (gate checks to avoid per-packet overhead)
@@ -271,7 +297,12 @@ impl Worker {
             top_flows,
         };
 
-        let _ = agg_tx.send(WorkerEvent::ShardTick(tick));
+        if self
+            .send_event(agg_tx, WorkerEvent::ShardTick(tick))
+            .is_err()
+        {
+            return;
+        }
 
         self.tick_bytes = 0;
         self.tick_packets = 0;
@@ -295,7 +326,21 @@ impl Worker {
             return;
         }
         let batch = std::mem::take(&mut self.expired_flows_buf);
-        let _ = agg_tx.send(WorkerEvent::ExpiredFlows(batch));
+        let _ = self.send_event(agg_tx, WorkerEvent::ExpiredFlows(batch));
+    }
+
+    fn send_event(&mut self, agg_tx: &Sender<WorkerEvent>, event: WorkerEvent) -> Result<(), ()> {
+        if self.agg_send_failed {
+            return Err(());
+        }
+
+        if agg_tx.send(event).is_err() {
+            tracing::warn!(shard = self.shard_id, "aggregator channel closed");
+            self.agg_send_failed = true;
+            return Err(());
+        }
+
+        Ok(())
     }
 }
 
