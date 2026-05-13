@@ -239,6 +239,12 @@ pub struct VlanStack {
     truncated: bool,
 }
 
+impl Default for VlanStack {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl VlanStack {
     pub fn new() -> Self {
         Self {

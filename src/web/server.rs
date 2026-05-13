@@ -593,6 +593,7 @@ fn should_serve_spa(path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::web::messages::StatsTick;
     use axum::{
         body::Body,
         http::{Request, StatusCode, header},
@@ -601,7 +602,6 @@ mod tests {
     use std::time::Duration;
     use tokio_tungstenite::tungstenite::Message as WsMessage;
     use tower::util::ServiceExt;
-    use crate::web::messages::StatsTick;
 
     fn test_state(auth: Option<BasicAuthCredentials>) -> Arc<AppState> {
         let (broadcast_tx, _) = broadcast::channel::<BroadcastFrame>(16);
@@ -820,8 +820,7 @@ mod tests {
             WsMessage::Text(t) => t,
             other => panic!("unexpected: {other:?}"),
         };
-        let hello_json: serde_json::Value =
-            serde_json::from_str(&hello_text).expect("hello json");
+        let hello_json: serde_json::Value = serde_json::from_str(&hello_text).expect("hello json");
         assert_eq!(hello_json["type"], "hello");
 
         server_handle.abort();
@@ -933,7 +932,11 @@ mod tests {
             .await
             .expect("reconnect");
 
-        let hello2 = socket2.next().await.expect("hello after reconnect").expect("msg");
+        let hello2 = socket2
+            .next()
+            .await
+            .expect("hello after reconnect")
+            .expect("msg");
         let hello2_text = match hello2 {
             WsMessage::Text(t) => t,
             other => panic!("unexpected: {other:?}"),

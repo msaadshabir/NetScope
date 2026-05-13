@@ -1262,7 +1262,7 @@ fn run_capture_pipeline(
     capture_result?;
 
     if let Some(err) = pipe.aggregator.take_fatal_error() {
-        return Err(std::io::Error::new(std::io::ErrorKind::Other, err).into());
+        return Err(std::io::Error::other(err).into());
     }
 
     // Print summary
