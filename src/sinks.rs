@@ -72,11 +72,9 @@ impl ExpiredFlowSinks {
                     break;
                 }
             }
-            if !disable_jsonl {
-                if let Err(err) = sink.flush() {
-                    tracing::warn!(error = %err, "expired flows jsonl disabled after flush error");
-                    disable_jsonl = true;
-                }
+            if !disable_jsonl && let Err(err) = sink.flush() {
+                tracing::warn!(error = %err, "expired flows jsonl disabled after flush error");
+                disable_jsonl = true;
             }
         }
         if disable_jsonl {
@@ -92,11 +90,9 @@ impl ExpiredFlowSinks {
                     break;
                 }
             }
-            if !disable_csv {
-                if let Err(err) = sink.flush() {
-                    tracing::warn!(error = %err, "expired flows csv disabled after flush error");
-                    disable_csv = true;
-                }
+            if !disable_csv && let Err(err) = sink.flush() {
+                tracing::warn!(error = %err, "expired flows csv disabled after flush error");
+                disable_csv = true;
             }
         }
         if disable_csv {
@@ -151,11 +147,11 @@ impl OutputSinks {
         description: &str,
     ) -> Result<(), std::io::Error> {
         let mut disable_alerts = false;
-        if let Some(sink) = self.alerts_jsonl.as_mut() {
-            if let Err(err) = sink.write_alert(ts, kind, description) {
-                tracing::warn!(error = %err, "alerts jsonl disabled after write error");
-                disable_alerts = true;
-            }
+        if let Some(sink) = self.alerts_jsonl.as_mut()
+            && let Err(err) = sink.write_alert(ts, kind, description)
+        {
+            tracing::warn!(error = %err, "alerts jsonl disabled after write error");
+            disable_alerts = true;
         }
         if disable_alerts {
             self.alerts_jsonl = None;
@@ -171,10 +167,7 @@ impl OutputSinks {
     }
 }
 
-fn open_optional_jsonl_sink(
-    path: Option<&Path>,
-    label: &str,
-) -> Option<JsonlSink> {
+fn open_optional_jsonl_sink(path: Option<&Path>, label: &str) -> Option<JsonlSink> {
     match path {
         Some(path) => match JsonlSink::new(path) {
             Ok(sink) => Some(sink),
@@ -192,10 +185,7 @@ fn open_optional_jsonl_sink(
     }
 }
 
-fn open_optional_csv_sink(
-    path: Option<&Path>,
-    label: &str,
-) -> Option<ExpiredFlowCsvSink> {
+fn open_optional_csv_sink(path: Option<&Path>, label: &str) -> Option<ExpiredFlowCsvSink> {
     match path {
         Some(path) => match ExpiredFlowCsvSink::new(path) {
             Ok(sink) => Some(sink),

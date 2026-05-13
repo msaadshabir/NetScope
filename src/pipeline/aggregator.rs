@@ -305,10 +305,10 @@ fn handle_event(
     output_sinks: &mut OutputSinks,
     mode: DrainMode,
 ) -> Result<(), std::io::Error> {
-    if let DrainMode::ShutdownOnly = mode {
-        if !matches!(event, WorkerEvent::Shutdown(_)) {
-            return Ok(());
-        }
+    if let DrainMode::ShutdownOnly = mode
+        && !matches!(event, WorkerEvent::Shutdown(_))
+    {
+        return Ok(());
     }
 
     match event {
