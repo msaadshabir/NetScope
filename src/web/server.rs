@@ -381,11 +381,20 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 }
 
 fn unauthorized_response() -> Response {
-    Response::builder()
+    match Response::builder()
         .status(StatusCode::UNAUTHORIZED)
         .header(header::WWW_AUTHENTICATE, "Basic realm=\"NetScope\"")
         .body(axum::body::Body::from("unauthorized"))
-        .unwrap()
+    {
+        Ok(response) => response,
+        Err(err) => {
+            tracing::error!(error = %err, "failed to build unauthorized response");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(axum::body::Body::from("internal error"))
+                .expect("response builder failed")
+        }
+    }
 }
 
 async fn handle_ws(mut socket: WebSocket, state: Arc<AppState>) {
@@ -552,7 +561,10 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(axum::body::Body::from("not found"))
-            .unwrap();
+            .unwrap_or_else(|err| {
+                tracing::error!(error = %err, "failed to build not found response");
+                Response::new(axum::body::Body::from("not found"))
+            });
     }
 
     // Try the exact path first, then fall back to index.html (SPA)
@@ -562,7 +574,10 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime.as_ref())
             .body(axum::body::Body::from(content.data.to_vec()))
-            .unwrap()
+            .unwrap_or_else(|err| {
+                tracing::error!(error = %err, "failed to build static file response");
+                Response::new(axum::body::Body::from("internal error"))
+            })
     } else if should_serve_spa(path) {
         let content = match Assets::get("index.html") {
             Some(content) => content,
@@ -570,19 +585,28 @@ async fn static_handler(uri: Uri) -> impl IntoResponse {
                 return Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(axum::body::Body::from("not found"))
-                    .unwrap();
+                    .unwrap_or_else(|err| {
+                        tracing::error!(error = %err, "failed to build not found response");
+                        Response::new(axum::body::Body::from("not found"))
+                    });
             }
         };
         Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
             .body(axum::body::Body::from(content.data.to_vec()))
-            .unwrap()
+            .unwrap_or_else(|err| {
+                tracing::error!(error = %err, "failed to build index.html response");
+                Response::new(axum::body::Body::from("internal error"))
+            })
     } else {
         Response::builder()
             .status(StatusCode::NOT_FOUND)
             .body(axum::body::Body::from("not found"))
-            .unwrap()
+            .unwrap_or_else(|err| {
+                tracing::error!(error = %err, "failed to build not found response");
+                Response::new(axum::body::Body::from("not found"))
+            })
     }
 }
 

@@ -102,17 +102,20 @@ impl AggregatorHandle {
 
     /// Take the latest aggregated tick (returns `None` if no new tick since last call).
     pub fn take_tick(&self) -> Option<AggregatedTick> {
-        self.inner.lock().unwrap().latest_tick.take()
+        self.inner.lock().ok()?.latest_tick.take()
     }
 
     /// Current alert count.
     pub fn alert_count(&self) -> u64 {
-        self.inner.lock().unwrap().alert_count
+        self.inner.lock().ok()?.alert_count
     }
 
     /// Collect all final flow snapshots (call after pipeline shutdown).
     pub fn take_final_snapshots(&self) -> Vec<FlowSnapshot> {
-        let mut state = self.inner.lock().unwrap();
+        let mut state = match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let mut all: Vec<FlowSnapshot> = state
             .shard_snapshots
             .drain(..)
@@ -125,7 +128,7 @@ impl AggregatorHandle {
 
     /// Take the fatal error, if any.
     pub fn take_fatal_error(&self) -> Option<String> {
-        self.inner.lock().unwrap().fatal_error.take()
+        self.inner.lock().ok()?.fatal_error.take()
     }
 }
 
@@ -142,7 +145,11 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
         running,
     } = config;
 
-    let num_workers = handle.inner.lock().unwrap().num_workers;
+    let num_workers = handle
+        .inner
+        .lock()
+        .map(|g| g.num_workers)
+        .unwrap_or_else(|e| e.into_inner().num_workers);
     let frame_seq = AtomicU64::new(0);
 
     // Accumulate partial shard ticks, then merge once all shards have reported.
@@ -191,7 +198,7 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
 
                         // Store for CLI consumption.
                         {
-                            let mut state = handle.inner.lock().unwrap();
+                            let mut state = handle.inner.lock().unwrap_or_else(|e| e.into_inner());
                             state.latest_tick = Some(merged);
                         }
 
@@ -245,7 +252,7 @@ pub fn run(rx: Receiver<WorkerEvent>, handle: AggregatorHandle, config: Aggregat
                     }
 
                     {
-                        let mut state = handle.inner.lock().unwrap();
+                        let mut state = handle.inner.lock().unwrap_or_else(|e| e.into_inner());
                         state.latest_tick = Some(merged);
                     }
 
@@ -313,12 +320,12 @@ fn handle_event(
 
     match event {
         WorkerEvent::Shutdown(shutdown) => {
-            let mut state = handle.inner.lock().unwrap();
+            let mut state = handle.inner.lock().unwrap_or_else(|e| e.into_inner());
             record_shutdown_snapshot(&mut state, shutdown);
         }
         WorkerEvent::Alert(alert) => {
             {
-                let mut state = handle.inner.lock().unwrap();
+                let mut state = handle.inner.lock().unwrap_or_else(|e| e.into_inner());
                 state.alert_count += 1;
             }
             output_sinks.write_alert(alert.ts, &alert.kind, &alert.description)?;
@@ -387,7 +394,7 @@ fn handle_fatal_error(
     context: &str,
 ) {
     tracing::error!(error = %err, context, "fatal pipeline error");
-    let mut state = handle.inner.lock().unwrap();
+    let mut state = handle.inner.lock().unwrap_or_else(|e| e.into_inner());
     if state.fatal_error.is_none() {
         state.fatal_error = Some(format!("{}: {}", context, err));
     }
