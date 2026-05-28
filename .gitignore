@@ -64,3 +64,5 @@ htmlcov/
 *.tar.xz
 *.tar.zst
 ```
+.DS_Store
+tmp/perf-trace.pcap
