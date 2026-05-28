@@ -107,7 +107,10 @@ impl AggregatorHandle {
 
     /// Current alert count.
     pub fn alert_count(&self) -> u64 {
-        self.inner.lock().ok()?.alert_count
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .alert_count
     }
 
     /// Collect all final flow snapshots (call after pipeline shutdown).
